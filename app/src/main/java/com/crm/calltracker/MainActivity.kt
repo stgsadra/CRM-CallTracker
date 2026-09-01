@@ -30,7 +30,6 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var statusText: TextView
 
-    // تماس فعال
     private var activeCall: CallInfo? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -269,17 +268,41 @@ class MainActivity : ComponentActivity() {
 
                 runOnUiThread {
 
-                    // ذخیره اطلاعات تماس فعال
                     activeCall = callInfo
 
-                    phoneInput.setText(callInfo.phone)
+                    val prefs =
+                        getSharedPreferences(
+                            "call_tracker",
+                            MODE_PRIVATE
+                        )
+
+                    prefs.edit()
+                        .putInt(
+                            "call_id",
+                            callInfo.callId
+                        )
+                        .putInt(
+                            "communication_id",
+                            callInfo.communicationId ?: 0
+                        )
+                        .putString(
+                            "phone",
+                            callInfo.phone
+                        )
+                        .apply()
+
+                    phoneInput.setText(
+                        callInfo.phone
+                    )
 
                     statusText.text =
                         "تماس در CRM ثبت شد؛ در حال تماس..."
 
                     val intent = Intent(
                         Intent.ACTION_CALL,
-                        Uri.parse("tel:${callInfo.phone}")
+                        Uri.parse(
+                            "tel:${callInfo.phone}"
+                        )
                     )
 
                     try {
