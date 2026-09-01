@@ -1,12 +1,10 @@
+```xml
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- اجازه برقراری تماس تلفنی -->
+    <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.CALL_PHONE" />
-
-    <!-- دریافت وضعیت تماس تلفنی -->
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
 
-    <uses-permission android:name="android.permission.INTERNET" />
     <application
         android:theme="@style/AppTheme"
         android:label="CRM CallTracker">
@@ -22,6 +20,17 @@
 
         </activity>
 
+        <receiver
+            android:name=".CallStateReceiver"
+            android:exported="false">
+
+            <intent-filter>
+                <action android:name="android.intent.action.PHONE_STATE" />
+            </intent-filter>
+
+        </receiver>
+
     </application>
 
 </manifest>
+```
