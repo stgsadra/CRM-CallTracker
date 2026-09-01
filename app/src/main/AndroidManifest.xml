@@ -6,7 +6,6 @@
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
 
     <application
-        android:theme="@style/AppTheme"
         android:label="CRM CallTracker">
 
         <activity
