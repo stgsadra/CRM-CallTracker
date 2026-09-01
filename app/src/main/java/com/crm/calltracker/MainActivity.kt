@@ -1,3 +1,4 @@
+```kotlin
 package com.crm.calltracker
 
 import android.Manifest
@@ -28,6 +29,9 @@ class MainActivity : ComponentActivity() {
     private lateinit var phoneInput: EditText
 
     private lateinit var statusText: TextView
+
+    // تماس فعال
+    private var activeCall: CallInfo? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -265,6 +269,9 @@ class MainActivity : ComponentActivity() {
 
                 runOnUiThread {
 
+                    // ذخیره اطلاعات تماس فعال
+                    activeCall = callInfo
+
                     phoneInput.setText(callInfo.phone)
 
                     statusText.text =
@@ -305,3 +312,5 @@ class MainActivity : ComponentActivity() {
         )
     }
 }
+```
+
