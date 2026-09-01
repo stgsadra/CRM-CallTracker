@@ -1,8 +1,15 @@
 ```xml
+<?xml version="1.0" encoding="utf-8"?>
+
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- Internet -->
     <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- Phone call -->
     <uses-permission android:name="android.permission.CALL_PHONE" />
+
+    <!-- Phone state -->
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
 
     <application
@@ -14,18 +21,27 @@
             android:exported="true">
 
             <intent-filter>
-                <action android:name="android.intent.action.MAIN"/>
-                <category android:name="android.intent.category.LAUNCHER"/>
+
+                <action
+                    android:name="android.intent.action.MAIN" />
+
+                <category
+                    android:name="android.intent.category.LAUNCHER" />
+
             </intent-filter>
 
         </activity>
 
         <receiver
             android:name=".CallStateReceiver"
-            android:exported="false">
+            android:enabled="true"
+            android:exported="true">
 
             <intent-filter>
-                <action android:name="android.intent.action.PHONE_STATE" />
+
+                <action
+                    android:name="android.intent.action.PHONE_STATE" />
+
             </intent-filter>
 
         </receiver>
