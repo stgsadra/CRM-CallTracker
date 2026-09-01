@@ -1,3 +1,4 @@
+```kotlin
 package com.crm.calltracker
 
 import android.content.BroadcastReceiver
@@ -13,13 +14,19 @@ class CallStateReceiver : BroadcastReceiver() {
         private const val PREFS = "call_tracker"
 
         private const val KEY_CALL_ID = "call_id"
-        private const val KEY_COMMUNICATION_ID = "communication_id"
-        private const val KEY_START_TIME = "start_time"
+        private const val KEY_COMMUNICATION_ID =
+            "communication_id"
+
+        private const val KEY_START_TIME =
+            "start_time"
+
         private const val KEY_PHONE = "phone"
 
-        private const val STATE_RINGING = "RINGING"
-        private const val STATE_OFFHOOK = "OFFHOOK"
-        private const val STATE_IDLE = "IDLE"
+        private const val STATE_OFFHOOK =
+            "OFFHOOK"
+
+        private const val STATE_IDLE =
+            "IDLE"
     }
 
     override fun onReceive(
@@ -27,7 +34,10 @@ class CallStateReceiver : BroadcastReceiver() {
         intent: Intent
     ) {
 
-        if (intent.action != TelephonyManager.ACTION_PHONE_STATE_CHANGED) {
+        if (
+            intent.action !=
+            TelephonyManager.ACTION_PHONE_STATE_CHANGED
+        ) {
             return
         }
 
@@ -46,9 +56,10 @@ class CallStateReceiver : BroadcastReceiver() {
 
             STATE_OFFHOOK -> {
 
-                // زمان شروع تماس واقعی
                 if (
-                    !prefs.contains(KEY_START_TIME)
+                    !prefs.contains(
+                        KEY_START_TIME
+                    )
                 ) {
 
                     prefs.edit()
@@ -147,14 +158,16 @@ class CallStateReceiver : BroadcastReceiver() {
                 },
 
             onSuccess = {
+
                 Toast.makeText(
                     context,
-                    "مدت تماس ثبت شد: ${duration} ثانیه",
+                    "مدت تماس ثبت شد: $duration ثانیه",
                     Toast.LENGTH_SHORT
                 ).show()
             },
 
             onError = { message ->
+
                 Toast.makeText(
                     context,
                     "خطا در ثبت تماس: $message",
@@ -176,3 +189,5 @@ class CallStateReceiver : BroadcastReceiver() {
             .apply()
     }
 }
+```
+
