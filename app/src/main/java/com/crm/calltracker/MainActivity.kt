@@ -154,7 +154,8 @@ class MainActivity : ComponentActivity() {
                     ApiConfig.SERVER_URL =
                         serverUrl.trimEnd('/')
 
-                    ApiConfig.AUTH_TOKEN = token
+                    ApiConfig.AUTH_TOKEN =
+                        token
 
                     statusText.text =
                         if (fullName.isNotEmpty()) {
@@ -164,7 +165,6 @@ class MainActivity : ComponentActivity() {
                         }
 
                     loginButton.isEnabled = true
-
                     callButton.isEnabled = true
                 }
             },
@@ -211,19 +211,97 @@ class MainActivity : ComponentActivity() {
                 Manifest.permission.CALL_PHONE
             ) != PackageManager.PERMISSION_GRANTED
         ) {
-
             checkCallPermission()
             return
         }
 
-        val intent = Intent(
-            Intent.ACTION_CALL,
-            Uri.parse("tel:$phone")
-        )
+        val customerIdText =
+            customerInput.text.toString().trim()
 
-        startActivity(intent)
+        if (customerIdText.isEmpty()) {
+            statusText.text =
+                "لطفاً شناسه مشتری را وارد کنید"
+            return
+        }
+
+        val customerId =
+            customerIdText.toIntOrNull()
+
+        if (customerId == null) {
+            statusText.text =
+                "شناسه مشتری نامعتبر است"
+            return
+        }
+
+        val serverUrl =
+            ApiConfig.SERVER_URL.trim()
+
+        val token =
+            ApiConfig.AUTH_TOKEN.trim()
+
+        if (serverUrl.isEmpty()) {
+            statusText.text =
+                "ابتدا وارد CRM شوید"
+            return
+        }
+
+        if (token.isEmpty()) {
+            statusText.text =
+                "توکن CRM موجود نیست؛ دوباره وارد شوید"
+            return
+        }
+
+        callButton.isEnabled = false
 
         statusText.text =
-            "در حال برقراری تماس با $phone"
+            "در حال ثبت تماس در CRM..."
+
+        CallApi.startCall(
+            serverUrl = serverUrl,
+            token = token,
+            customerId = customerId,
+
+            onSuccess = { callInfo ->
+
+                runOnUiThread {
+
+                    phoneInput.setText(callInfo.phone)
+
+                    statusText.text =
+                        "تماس در CRM ثبت شد؛ در حال تماس..."
+
+                    val intent = Intent(
+                        Intent.ACTION_CALL,
+                        Uri.parse("tel:${callInfo.phone}")
+                    )
+
+                    try {
+
+                        startActivity(intent)
+
+                        statusText.text =
+                            "در حال تماس با ${callInfo.phone}"
+
+                    } catch (e: Exception) {
+
+                        statusText.text =
+                            "برقراری تماس انجام نشد"
+
+                        callButton.isEnabled = true
+                    }
+                }
+            },
+
+            onError = { message ->
+
+                runOnUiThread {
+
+                    statusText.text =
+                        "خطا در ثبت تماس: $message"
+
+                    callButton.isEnabled = true
+                }
+            }
+        )
     }
 }
