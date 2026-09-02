@@ -6,7 +6,10 @@
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
 
     <application
-        android:label="CRM CallTracker">
+        android:theme="@style/AppTheme"
+        android:label="CRM CallTracker"
+        android:allowBackup="false"
+        android:supportsRtl="true">
 
         <activity
             android:name=".MainActivity"
@@ -33,3 +36,4 @@
     </application>
 
 </manifest>
+```
