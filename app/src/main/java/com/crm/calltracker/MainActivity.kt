@@ -1,4 +1,3 @@
-```kotlin
 package com.crm.calltracker
 
 import android.Manifest
@@ -37,6 +36,45 @@ class MainActivity : ComponentActivity() {
 
         createUi()
         checkCallPermission()
+
+        discoverServer()
+    }
+
+    private fun discoverServer() {
+
+        statusText.text = "در حال پیدا کردن سرور CRM..."
+
+        loginButton.isEnabled = false
+
+        ServerDiscovery.findServer(
+            context = this,
+
+            onFound = { serverUrl ->
+
+                runOnUiThread {
+
+                    ApiConfig.SERVER_URL = serverUrl
+
+                    serverInput.setText(serverUrl)
+
+                    statusText.text =
+                        "سرور CRM پیدا شد"
+
+                    loginButton.isEnabled = true
+                }
+            },
+
+            onError = { message ->
+
+                runOnUiThread {
+
+                    statusText.text =
+                        "سرور CRM پیدا نشد؛ آدرس را دستی وارد کنید"
+
+                    loginButton.isEnabled = true
+                }
+            }
+        )
     }
 
     private fun createUi() {
@@ -102,8 +140,10 @@ class MainActivity : ComponentActivity() {
                 .trim()
 
             if (phone.isEmpty()) {
+
                 statusText.text =
                     "لطفاً شماره تلفن را وارد کنید"
+
                 return@setOnClickListener
             }
 
@@ -123,20 +163,26 @@ class MainActivity : ComponentActivity() {
             passwordInput.text.toString()
 
         if (serverUrl.isEmpty()) {
+
             statusText.text =
-                "آدرس CRM را وارد کنید"
+                "آدرس CRM پیدا نشده است"
+
             return
         }
 
         if (username.isEmpty()) {
+
             statusText.text =
                 "نام کاربری را وارد کنید"
+
             return
         }
 
         if (password.isEmpty()) {
+
             statusText.text =
                 "رمز عبور را وارد کنید"
+
             return
         }
 
@@ -214,6 +260,7 @@ class MainActivity : ComponentActivity() {
                 Manifest.permission.CALL_PHONE
             ) != PackageManager.PERMISSION_GRANTED
         ) {
+
             checkCallPermission()
             return
         }
@@ -222,8 +269,10 @@ class MainActivity : ComponentActivity() {
             customerInput.text.toString().trim()
 
         if (customerIdText.isEmpty()) {
+
             statusText.text =
                 "لطفاً شناسه مشتری را وارد کنید"
+
             return
         }
 
@@ -231,8 +280,10 @@ class MainActivity : ComponentActivity() {
             customerIdText.toIntOrNull()
 
         if (customerId == null) {
+
             statusText.text =
                 "شناسه مشتری نامعتبر است"
+
             return
         }
 
@@ -243,14 +294,18 @@ class MainActivity : ComponentActivity() {
             ApiConfig.AUTH_TOKEN.trim()
 
         if (serverUrl.isEmpty()) {
+
             statusText.text =
-                "ابتدا وارد CRM شوید"
+                "سرور CRM پیدا نشده است"
+
             return
         }
 
         if (token.isEmpty()) {
+
             statusText.text =
                 "توکن CRM موجود نیست؛ دوباره وارد شوید"
+
             return
         }
 
@@ -335,5 +390,3 @@ class MainActivity : ComponentActivity() {
         )
     }
 }
-```
-
