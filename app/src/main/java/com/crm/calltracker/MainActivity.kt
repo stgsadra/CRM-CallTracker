@@ -37,7 +37,7 @@ class MainActivity : ComponentActivity() {
         createUi()
         checkCallPermission()
 
-        discoverServer()
+        
     }
 
     private fun discoverServer() {
