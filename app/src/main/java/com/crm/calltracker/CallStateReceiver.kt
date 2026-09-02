@@ -1,4 +1,3 @@
-```kotlin
 package com.crm.calltracker
 
 import android.content.BroadcastReceiver
@@ -108,6 +107,7 @@ class CallStateReceiver : BroadcastReceiver() {
 
                 sendCallEnd(
                     context = context,
+                    prefs = prefs,
                     callId = callId,
                     communicationId =
                         if (communicationId != 0) {
@@ -118,14 +118,13 @@ class CallStateReceiver : BroadcastReceiver() {
                     duration =
                         durationSeconds.toInt()
                 )
-
-                clearCall(prefs)
             }
         }
     }
 
     private fun sendCallEnd(
         context: Context,
+        prefs: android.content.SharedPreferences,
         callId: Int,
         communicationId: Int?,
         duration: Int
@@ -141,6 +140,13 @@ class CallStateReceiver : BroadcastReceiver() {
             serverUrl.isEmpty() ||
             token.isEmpty()
         ) {
+
+            Toast.makeText(
+                context,
+                "آدرس سرور یا توکن CRM تنظیم نشده است",
+                Toast.LENGTH_LONG
+            ).show()
+
             return
         }
 
@@ -159,6 +165,10 @@ class CallStateReceiver : BroadcastReceiver() {
 
             onSuccess = {
 
+                // فقط وقتی CRM با موفقیت پاسخ داد
+                // اطلاعات تماس را از گوشی پاک می‌کنیم.
+                clearCall(prefs)
+
                 Toast.makeText(
                     context,
                     "مدت تماس ثبت شد: $duration ثانیه",
@@ -167,6 +177,9 @@ class CallStateReceiver : BroadcastReceiver() {
             },
 
             onError = { message ->
+
+                // در صورت خطا، اطلاعات تماس را پاک نمی‌کنیم
+                // تا امکان ارسال مجدد وجود داشته باشد.
 
                 Toast.makeText(
                     context,
@@ -189,5 +202,3 @@ class CallStateReceiver : BroadcastReceiver() {
             .apply()
     }
 }
-```
-
