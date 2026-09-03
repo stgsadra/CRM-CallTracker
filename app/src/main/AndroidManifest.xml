@@ -7,7 +7,8 @@
 
     <application
         android:theme="@style/AppTheme"
-        android:label="CRM CallTracker">
+        android:label="CRM CallTracker"
+        android:usesCleartextTraffic="true">
 
         <activity
             android:name=".MainActivity"
@@ -34,4 +35,3 @@
     </application>
 
 </manifest>
-
