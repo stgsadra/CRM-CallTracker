@@ -1,4 +1,3 @@
-```kotlin
 package com.crm.calltracker
 
 import android.content.Context
@@ -120,4 +119,4 @@ object ServerDiscovery {
         }
     }
 }
-```
+
