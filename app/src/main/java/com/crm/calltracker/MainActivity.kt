@@ -20,6 +20,9 @@ class MainActivity : ComponentActivity() {
     private val CALL_PERMISSION_CODE = 1001
 
     private lateinit var rootLayout: LinearLayout
+    private lateinit var serverInput: EditText
+    private lateinit var loginButton: Button
+    private lateinit var loginStatusText: TextView
 
     private var activeCall: CallInfo? = null
 
@@ -43,12 +46,12 @@ class MainActivity : ComponentActivity() {
         title.gravity = Gravity.CENTER
         title.setPadding(0, 0, 0, 30)
 
-        val statusText = TextView(this)
-        statusText.text = "در حال پیدا کردن سرور CRM..."
-        statusText.textSize = 16f
-        statusText.setPadding(0, 0, 0, 20)
+        loginStatusText = TextView(this)
+        loginStatusText.text = "در حال پیدا کردن سرور CRM..."
+        loginStatusText.textSize = 16f
+        loginStatusText.setPadding(0, 0, 0, 20)
 
-        val serverInput = EditText(this)
+        serverInput = EditText(this)
         serverInput.hint = "آدرس CRM"
         serverInput.setText(ApiConfig.SERVER_URL)
 
@@ -61,12 +64,12 @@ class MainActivity : ComponentActivity() {
             InputType.TYPE_CLASS_TEXT or
             InputType.TYPE_TEXT_VARIATION_PASSWORD
 
-        val loginButton = Button(this)
+        loginButton = Button(this)
         loginButton.text = "ورود به CRM"
         loginButton.isEnabled = ApiConfig.SERVER_URL.isNotEmpty()
 
         rootLayout.addView(title)
-        rootLayout.addView(statusText)
+        rootLayout.addView(loginStatusText)
         rootLayout.addView(serverInput)
         rootLayout.addView(usernameInput)
         rootLayout.addView(passwordInput)
@@ -81,21 +84,26 @@ class MainActivity : ComponentActivity() {
             val password = passwordInput.text.toString()
 
             if (serverUrl.isEmpty()) {
-                statusText.text = "آدرس CRM وارد نشده است"
+                loginStatusText.text =
+                    "آدرس CRM وارد نشده است"
                 return@setOnClickListener
             }
 
             if (username.isEmpty()) {
-                statusText.text = "نام کاربری را وارد کنید"
+                loginStatusText.text =
+                    "نام کاربری را وارد کنید"
                 return@setOnClickListener
             }
 
             if (password.isEmpty()) {
-                statusText.text = "رمز عبور را وارد کنید"
+                loginStatusText.text =
+                    "رمز عبور را وارد کنید"
                 return@setOnClickListener
             }
 
-            statusText.text = "در حال ورود به CRM..."
+            loginStatusText.text =
+                "در حال ورود به CRM..."
+
             loginButton.isEnabled = false
 
             LoginApi.login(
@@ -112,9 +120,7 @@ class MainActivity : ComponentActivity() {
 
                         ApiConfig.AUTH_TOKEN = token
 
-                        showMainPage(
-                            fullName = fullName
-                        )
+                        showMainPage(fullName)
                     }
                 },
 
@@ -122,7 +128,7 @@ class MainActivity : ComponentActivity() {
 
                     runOnUiThread {
 
-                        statusText.text =
+                        loginStatusText.text =
                             "خطا: $message"
 
                         loginButton.isEnabled = true
@@ -130,6 +136,47 @@ class MainActivity : ComponentActivity() {
                 }
             )
         }
+    }
+
+    private fun discoverServer() {
+
+        ServerDiscovery.findServer(
+
+            context = this,
+
+            onFound = { serverUrl ->
+
+                runOnUiThread {
+
+                    // ذخیره آدرس پیدا شده
+                    ApiConfig.SERVER_URL =
+                        serverUrl.trimEnd('/')
+
+                    // نمایش آدرس واقعی داخل فیلد
+                    serverInput.setText(
+                        ApiConfig.SERVER_URL
+                    )
+
+                    // اطلاع به کاربر
+                    loginStatusText.text =
+                        "سرور CRM پیدا شد"
+
+                    // فعال کردن ورود
+                    loginButton.isEnabled = true
+                }
+            },
+
+            onError = {
+
+                runOnUiThread {
+
+                    loginStatusText.text =
+                        "سرور CRM پیدا نشد؛ آدرس را دستی وارد کنید"
+
+                    loginButton.isEnabled = true
+                }
+            }
+        )
     }
 
     private fun showMainPage(fullName: String) {
@@ -145,6 +192,7 @@ class MainActivity : ComponentActivity() {
         title.setPadding(0, 0, 0, 25)
 
         val welcomeText = TextView(this)
+
         welcomeText.text =
             if (fullName.isNotEmpty()) {
                 "خوش آمدید $fullName"
@@ -157,12 +205,14 @@ class MainActivity : ComponentActivity() {
         welcomeText.setPadding(0, 0, 0, 30)
 
         val customerInput = EditText(this)
-        customerInput.hint = "شناسه مشتری (Customer ID)"
+        customerInput.hint =
+            "شناسه مشتری (Customer ID)"
         customerInput.inputType =
             InputType.TYPE_CLASS_NUMBER
 
         val phoneInput = EditText(this)
-        phoneInput.hint = "شماره تلفن مشتری"
+        phoneInput.hint =
+            "شماره تلفن مشتری"
         phoneInput.inputType =
             InputType.TYPE_CLASS_PHONE
 
@@ -170,7 +220,8 @@ class MainActivity : ComponentActivity() {
         callButton.text = "📞 تماس"
 
         val statusText = TextView(this)
-        statusText.text = "آماده برقراری تماس"
+        statusText.text =
+            "آماده برقراری تماس"
         statusText.textSize = 16f
         statusText.setPadding(0, 25, 0, 0)
 
@@ -185,7 +236,8 @@ class MainActivity : ComponentActivity() {
 
         callButton.setOnClickListener {
 
-            val phone = phoneInput.text.toString().trim()
+            val phone =
+                phoneInput.text.toString().trim()
 
             if (phone.isEmpty()) {
                 statusText.text =
@@ -218,56 +270,6 @@ class MainActivity : ComponentActivity() {
                 callButton = callButton
             )
         }
-    }
-
-    private fun discoverServer() {
-
-        ServerDiscovery.findServer(
-
-            context = this,
-
-            onFound = { serverUrl ->
-
-                runOnUiThread {
-
-                    ApiConfig.SERVER_URL = serverUrl
-
-                    val currentView =
-                        rootLayout
-
-                    if (currentView.childCount > 1) {
-
-                        val statusView =
-                            currentView.getChildAt(1)
-
-                        if (statusView is TextView) {
-                            statusView.text =
-                                "سرور CRM پیدا شد"
-                        }
-                    }
-                }
-            },
-
-            onError = { message ->
-
-                runOnUiThread {
-
-                    val currentView =
-                        rootLayout
-
-                    if (currentView.childCount > 1) {
-
-                        val statusView =
-                            currentView.getChildAt(1)
-
-                        if (statusView is TextView) {
-                            statusView.text =
-                                "سرور CRM پیدا نشد"
-                        }
-                    }
-                }
-            }
-        )
     }
 
     private fun checkCallPermission() {
@@ -368,6 +370,11 @@ class MainActivity : ComponentActivity() {
                         )
                         .apply()
 
+                    phoneInputSet(
+                        phoneInput = null,
+                        phone = callInfo.phone
+                    )
+
                     statusText.text =
                         "تماس در CRM ثبت شد؛ در حال تماس..."
 
@@ -385,7 +392,7 @@ class MainActivity : ComponentActivity() {
                         statusText.text =
                             "در حال تماس با ${callInfo.phone}"
 
-                    } catch (e: Exception) {
+                    } catch (_: Exception) {
 
                         statusText.text =
                             "برقراری تماس انجام نشد"
@@ -407,4 +414,12 @@ class MainActivity : ComponentActivity() {
             }
         )
     }
+
+    private fun phoneInputSet(
+        phoneInput: EditText?,
+        phone: String
+    ) {
+        // شماره در صورت نیاز بعداً در UI قرار می‌گیرد.
+    }
 }
+       
