@@ -3,47 +3,34 @@ package com.crm.calltracker
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.os.Handler
+import android.os.Looper
 import android.telephony.TelephonyManager
 import android.widget.Toast
 
 class CallStateReceiver : BroadcastReceiver() {
 
     companion object {
-
         private const val PREFS = "call_tracker"
 
         private const val KEY_CALL_ID = "call_id"
-        private const val KEY_COMMUNICATION_ID =
-            "communication_id"
-
-        private const val KEY_START_TIME =
-            "start_time"
-
+        private const val KEY_COMMUNICATION_ID = "communication_id"
+        private const val KEY_START_TIME = "start_time"
         private const val KEY_PHONE = "phone"
 
-        private const val STATE_OFFHOOK =
-            "OFFHOOK"
-
-        private const val STATE_IDLE =
-            "IDLE"
+        private const val STATE_OFFHOOK = "OFFHOOK"
+        private const val STATE_IDLE = "IDLE"
     }
 
-    override fun onReceive(
-        context: Context,
-        intent: Intent
-    ) {
+    override fun onReceive(context: Context, intent: Intent) {
 
-        if (
-            intent.action !=
-            TelephonyManager.ACTION_PHONE_STATE_CHANGED
-        ) {
+        if (intent.action != TelephonyManager.ACTION_PHONE_STATE_CHANGED) {
             return
         }
 
         val state =
-            intent.getStringExtra(
-                TelephonyManager.EXTRA_STATE
-            ) ?: return
+            intent.getStringExtra(TelephonyManager.EXTRA_STATE)
+                ?: return
 
         val prefs =
             context.getSharedPreferences(
@@ -55,11 +42,8 @@ class CallStateReceiver : BroadcastReceiver() {
 
             STATE_OFFHOOK -> {
 
-                if (
-                    !prefs.contains(
-                        KEY_START_TIME
-                    )
-                ) {
+                // شروع زمان‌گیری تماس
+                if (!prefs.contains(KEY_START_TIME)) {
 
                     prefs.edit()
                         .putLong(
@@ -73,10 +57,7 @@ class CallStateReceiver : BroadcastReceiver() {
             STATE_IDLE -> {
 
                 val startTime =
-                    prefs.getLong(
-                        KEY_START_TIME,
-                        0L
-                    )
+                    prefs.getLong(KEY_START_TIME, 0L)
 
                 if (startTime == 0L) {
                     return
@@ -84,15 +65,11 @@ class CallStateReceiver : BroadcastReceiver() {
 
                 val durationSeconds =
                     (
-                        System.currentTimeMillis() -
-                        startTime
+                        System.currentTimeMillis() - startTime
                     ) / 1000
 
                 val callId =
-                    prefs.getInt(
-                        KEY_CALL_ID,
-                        0
-                    )
+                    prefs.getInt(KEY_CALL_ID, 0)
 
                 val communicationId =
                     prefs.getInt(
@@ -101,7 +78,9 @@ class CallStateReceiver : BroadcastReceiver() {
                     )
 
                 if (callId == 0) {
+
                     clearCall(prefs)
+
                     return
                 }
 
@@ -115,8 +94,7 @@ class CallStateReceiver : BroadcastReceiver() {
                         } else {
                             null
                         },
-                    duration =
-                        durationSeconds.toInt()
+                    duration = durationSeconds.toInt()
                 )
             }
         }
@@ -141,11 +119,12 @@ class CallStateReceiver : BroadcastReceiver() {
             token.isEmpty()
         ) {
 
-            Toast.makeText(
+            showToast(
                 context,
-                "آدرس سرور یا توکن CRM تنظیم نشده است",
-                Toast.LENGTH_LONG
-            ).show()
+                "آدرس سرور یا توکن CRM تنظیم نشده است"
+            )
+
+            clearCall(prefs)
 
             return
         }
@@ -165,29 +144,39 @@ class CallStateReceiver : BroadcastReceiver() {
 
             onSuccess = {
 
-                // فقط وقتی CRM با موفقیت پاسخ داد
-                // اطلاعات تماس را از گوشی پاک می‌کنیم.
                 clearCall(prefs)
 
-                Toast.makeText(
+                showToast(
                     context,
-                    "مدت تماس ثبت شد: $duration ثانیه",
-                    Toast.LENGTH_SHORT
-                ).show()
+                    "تماس با موفقیت ثبت شد\nمدت: $duration ثانیه"
+                )
             },
 
             onError = { message ->
 
-                // در صورت خطا، اطلاعات تماس را پاک نمی‌کنیم
-                // تا امکان ارسال مجدد وجود داشته باشد.
+                clearCall(prefs)
 
-                Toast.makeText(
+                showToast(
                     context,
-                    "خطا در ثبت تماس: $message",
-                    Toast.LENGTH_LONG
-                ).show()
+                    "خطا در ثبت مدت تماس:\n$message"
+                )
             }
         )
+    }
+
+    private fun showToast(
+        context: Context,
+        message: String
+    ) {
+
+        Handler(Looper.getMainLooper()).post {
+
+            Toast.makeText(
+                context.applicationContext,
+                message,
+                Toast.LENGTH_LONG
+            ).show()
+        }
     }
 
     private fun clearCall(
@@ -202,3 +191,4 @@ class CallStateReceiver : BroadcastReceiver() {
             .apply()
     }
 }
+                
