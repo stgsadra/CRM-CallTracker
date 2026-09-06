@@ -10,7 +10,6 @@ import android.os.Looper
 object ServerDiscovery {
 
     private const val SERVICE_TYPE = "_crm._tcp."
-    private const val SERVICE_NAME = "CRM-Server"
     private const val TIMEOUT_MS = 15000L
 
     fun findServer(
@@ -84,22 +83,26 @@ object ServerDiscovery {
 
             multicastLock?.setReferenceCounted(false)
             multicastLock?.acquire()
+
         } catch (e: Exception) {
+
             failure(
-                "خطا در فعال کردن MulticastLock: ${e.message}"
+                "MulticastLock خطا داد: ${e.message}"
             )
             return
         }
 
         val timeout = Runnable {
             failure(
-                "mDNS timeout: در مدت 15 ثانیه هیچ سرویس CRM پیدا نشد"
+                "Android هیچ سرویس mDNS با نوع _crm._tcp پیدا نکرد"
             )
         }
 
         listener = object : NsdManager.DiscoveryListener {
 
-            override fun onDiscoveryStarted(serviceType: String) {
+            override fun onDiscoveryStarted(
+                serviceType: String
+            ) {
 
                 handler.postDelayed(
                     timeout,
@@ -119,16 +122,15 @@ object ServerDiscovery {
                 val type =
                     serviceInfo.serviceType ?: ""
 
-                if (!name.startsWith(
-                        SERVICE_NAME,
-                        ignoreCase = true
-                    )
-                ) {
-                    return
-                }
+                /*
+                 * فعلاً اسم سرویس را بررسی نمی‌کنیم.
+                 *
+                 * فقط اگر Android هر سرویس _crm._tcp
+                 * پیدا کند، آن را Resolve می‌کنیم.
+                 */
 
-                if (!type.trimEnd('.').equals(
-                        SERVICE_TYPE.trimEnd('.'),
+                if (!type.contains(
+                        "_crm._tcp",
                         ignoreCase = true
                     )
                 ) {
@@ -154,16 +156,23 @@ object ServerDiscovery {
                                     resolvedInfo.port
 
                                 if (host.isNullOrBlank()) {
+
                                     failure(
-                                        "mDNS Resolve شد ولی IP خالی است"
+                                        "سرویس پیدا شد اما IP آن خالی است\n" +
+                                        "نام: $name\n" +
+                                        "نوع: $type"
                                     )
+
                                     return
                                 }
 
                                 if (port <= 0) {
+
                                     failure(
-                                        "mDNS Resolve شد ولی Port نامعتبر است: $port"
+                                        "سرویس پیدا شد اما Port نامعتبر است: $port\n" +
+                                        "نام: $name"
                                     )
+
                                     return
                                 }
 
@@ -178,7 +187,10 @@ object ServerDiscovery {
                             ) {
 
                                 failure(
-                                    "mDNS سرویس پیدا شد ولی Resolve شکست خورد. کد خطا: $errorCode"
+                                    "سرویس mDNS پیدا شد ولی Resolve نشد.\n" +
+                                    "نام: ${serviceInfo.serviceName}\n" +
+                                    "نوع: ${serviceInfo.serviceType}\n" +
+                                    "کد خطا: $errorCode"
                                 )
                             }
                         }
@@ -187,7 +199,7 @@ object ServerDiscovery {
                 } catch (e: Exception) {
 
                     failure(
-                        "خطا هنگام Resolve سرویس mDNS: ${e.message}"
+                        "خطا در Resolve mDNS:\n${e.message}"
                     )
                 }
             }
@@ -208,7 +220,9 @@ object ServerDiscovery {
             ) {
 
                 failure(
-                    "شروع mDNS ناموفق بود. کد خطا: $errorCode"
+                    "شروع جستجوی mDNS شکست خورد.\n" +
+                    "نوع: $serviceType\n" +
+                    "کد خطا: $errorCode"
                 )
             }
 
@@ -230,7 +244,7 @@ object ServerDiscovery {
         } catch (e: Exception) {
 
             failure(
-                "خطا در شروع mDNS: ${e.message}"
+                "خطا در شروع mDNS:\n${e.message}"
             )
         }
     }
