@@ -1,64 +1,37 @@
 package com.crm.calltracker
 
 import android.content.Context
-import android.net.wifi.WifiManager
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
+import android.net.wifi.WifiManager
 import android.os.Handler
 import android.os.Looper
 
 object ServerDiscovery {
 
     private const val SERVICE_TYPE = "_crm._tcp."
+    private const val SERVICE_NAME = "CRM-Server"
     private const val TIMEOUT_MS = 15000L
-
-    private var discoveryListener: NsdManager.DiscoveryListener? = null
-    private var multicastLock: WifiManager.MulticastLock? = null
-    private var isFinished = false
 
     fun findServer(
         context: Context,
         onFound: (String) -> Unit,
         onError: (String) -> Unit
     ) {
-
-        isFinished = false
-
         val appContext = context.applicationContext
-
         val nsdManager =
-            appContext.getSystemService(
-                Context.NSD_SERVICE
-            ) as NsdManager
+            appContext.getSystemService(Context.NSD_SERVICE) as NsdManager
 
         val wifiManager =
-            appContext.getSystemService(
-                Context.WIFI_SERVICE
-            ) as WifiManager
+            appContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
 
-        val handler =
-            Handler(Looper.getMainLooper())
+        val handler = Handler(Looper.getMainLooper())
 
-        // ---------------------------------------------------------
-        // فعال کردن Multicast برای دریافت mDNS
-        // ---------------------------------------------------------
-
-        try {
-
-            multicastLock =
-                wifiManager.createMulticastLock(
-                    "CRM_CallTracker"
-                )
-
-            multicastLock?.setReferenceCounted(false)
-
-            multicastLock?.acquire()
-
-        } catch (_: Exception) {
-        }
+        var finished = false
+        var discoveryListener: NsdManager.DiscoveryListener? = null
+        var multicastLock: WifiManager.MulticastLock? = null
 
         fun cleanup() {
-
             try {
                 discoveryListener?.let {
                     nsdManager.stopServiceDiscovery(it)
@@ -80,14 +53,21 @@ object ServerDiscovery {
             multicastLock = null
         }
 
-        fun found(url: String) {
+        fun fail(message: String) {
+            if (finished) return
 
-            if (isFinished) {
-                return
+            finished = true
+            cleanup()
+
+            handler.post {
+                onError(message)
             }
+        }
 
-            isFinished = true
+        fun success(url: String) {
+            if (finished) return
 
+            finished = true
             cleanup()
 
             ApiConfig.SERVER_URL = url
@@ -97,47 +77,23 @@ object ServerDiscovery {
             }
         }
 
-        fun failed(message: String) {
+        try {
+            multicastLock =
+                wifiManager.createMulticastLock("CRM_CallTracker")
 
-            if (isFinished) {
-                return
-            }
-
-            isFinished = true
-
-            cleanup()
-
-            handler.post {
-                onError(message)
-            }
+            multicastLock?.setReferenceCounted(false)
+            multicastLock?.acquire()
+        } catch (_: Exception) {
         }
-
-        // ---------------------------------------------------------
-        // Timeout
-        // ---------------------------------------------------------
 
         val timeoutRunnable = Runnable {
-
-            if (isFinished) {
-                return@Runnable
-            }
-
-            failed(
-                "سرور CRM از طریق mDNS پیدا نشد"
-            )
+            fail("mDNS timeout: سرویس پیدا یا Resolve نشد")
         }
-
-        // ---------------------------------------------------------
-        // mDNS Discovery
-        // ---------------------------------------------------------
 
         discoveryListener =
             object : NsdManager.DiscoveryListener {
 
-                override fun onDiscoveryStarted(
-                    serviceType: String
-                ) {
-
+                override fun onDiscoveryStarted(serviceType: String) {
                     handler.postDelayed(
                         timeoutRunnable,
                         TIMEOUT_MS
@@ -147,66 +103,62 @@ object ServerDiscovery {
                 override fun onServiceFound(
                     serviceInfo: NsdServiceInfo
                 ) {
+                    if (finished) return
 
-                    if (isFinished) {
-                        return
-                    }
-
-                    val serviceName =
+                    val name =
                         serviceInfo.serviceName ?: ""
 
-                    val serviceType =
+                    val type =
                         serviceInfo.serviceType ?: ""
 
-                    val typeMatches =
-                        serviceType
-                            .trimEnd('.')
-                            .equals(
-                                SERVICE_TYPE.trimEnd('.'),
-                                ignoreCase = true
-                            )
-
-                    val nameMatches =
-                        serviceName.startsWith(
-                            "CRM-Server",
+                    val correctName =
+                        name.startsWith(
+                            SERVICE_NAME,
                             ignoreCase = true
                         )
 
-                    if (!typeMatches && !nameMatches) {
+                    val correctType =
+                        type.trimEnd('.').equals(
+                            SERVICE_TYPE.trimEnd('.'),
+                            ignoreCase = true
+                        )
+
+                    if (!correctName || !correctType) {
                         return
                     }
 
                     try {
-
                         nsdManager.resolveService(
                             serviceInfo,
-                            object :
-                                NsdManager.ResolveListener {
+                            object : NsdManager.ResolveListener {
 
                                 override fun onServiceResolved(
                                     resolvedInfo: NsdServiceInfo
                                 ) {
+                                    if (finished) return
 
-                                    if (isFinished) {
-                                        return
-                                    }
-
-                                    val address =
-                                        resolvedInfo.host
-                                            ?.hostAddress
+                                    val host =
+                                        resolvedInfo.host?.hostAddress
 
                                     val port =
                                         resolvedInfo.port
 
-                                    if (
-                                        address.isNullOrEmpty() ||
-                                        port <= 0
-                                    ) {
+                                    if (host.isNullOrBlank()) {
+                                        fail(
+                                            "mDNS Resolve شد ولی IP خالی است"
+                                        )
                                         return
                                     }
 
-                                    found(
-                                        "http://$address:$port"
+                                    if (port <= 0) {
+                                        fail(
+                                            "mDNS Resolve شد ولی Port نامعتبر است"
+                                        )
+                                        return
+                                    }
+
+                                    success(
+                                        "http://$host:$port"
                                     )
                                 }
 
@@ -214,13 +166,18 @@ object ServerDiscovery {
                                     serviceInfo: NsdServiceInfo,
                                     errorCode: Int
                                 ) {
-                                    // Discovery ادامه پیدا می‌کند.
+                                    fail(
+                                        "mDNS سرویس پیدا شد ولی Resolve شکست خورد. کد خطا: $errorCode"
+                                    )
                                 }
                             }
                         )
-
-                    } catch (_: Exception) {
-                        // خطای resolve باعث Crash نمی‌شود.
+                    } catch (e: Exception) {
+                        fail(
+                            "خطا در Resolve: ${
+                                e.message ?: "unknown"
+                            }"
+                        )
                     }
                 }
 
@@ -238,13 +195,8 @@ object ServerDiscovery {
                     serviceType: String,
                     errorCode: Int
                 ) {
-
-                    if (isFinished) {
-                        return
-                    }
-
-                    failed(
-                        "شروع mDNS ناموفق بود. کد خطا: $errorCode"
+                    fail(
+                        "شروع mDNS شکست خورد. کد خطا: $errorCode"
                     )
                 }
 
@@ -255,25 +207,18 @@ object ServerDiscovery {
                 }
             }
 
-        // ---------------------------------------------------------
-        // شروع Discovery
-        // ---------------------------------------------------------
-
         try {
-
             nsdManager.discoverServices(
                 SERVICE_TYPE,
                 NsdManager.PROTOCOL_DNS_SD,
                 discoveryListener!!
             )
-
         } catch (e: Exception) {
-
-            failed(
-                e.message
-                    ?: "خطا در شروع mDNS"
+            fail(
+                "خطا در شروع mDNS: ${
+                    e.message ?: "unknown"
+                }"
             )
         }
     }
 }
-
