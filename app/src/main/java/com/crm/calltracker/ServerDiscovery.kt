@@ -2,11 +2,9 @@ package com.crm.calltracker
 
 import android.content.Context
 import android.net.ConnectivityManager
-import android.net.LinkProperties
-import android.net.Network
+import android.net.wifi.WifiManager
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
-import android.net.wifi.WifiManager
 import android.os.Handler
 import android.os.Looper
 import java.net.Inet4Address
@@ -21,10 +19,11 @@ object ServerDiscovery {
     private const val SERVICE_NAME_PREFIX = "CRM-Server"
 
     private const val DISCOVERY_TIMEOUT_MS = 10000L
-    private const val CONNECTION_TIMEOUT_MS = 400L
+    private const val SCAN_TIMEOUT_MS = 20000L
+    private const val CONNECTION_TIMEOUT_MS = 500
+
     private const val CRM_PORT = 5001
 
-    private var finished = false
     private var discoveryListener: NsdManager.DiscoveryListener? = null
     private var multicastLock: WifiManager.MulticastLock? = null
 
@@ -36,29 +35,25 @@ object ServerDiscovery {
         onError: (String) -> Unit
     ) {
 
-        finished = false
-
         val appContext = context.applicationContext
 
         val nsdManager =
-            appContext.getSystemService(Context.NSD_SERVICE) as NsdManager
+            appContext.getSystemService(
+                Context.NSD_SERVICE
+            ) as NsdManager
 
         val wifiManager =
-            appContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+            appContext.getSystemService(
+                Context.WIFI_SERVICE
+            ) as WifiManager
 
-        val handler = Handler(Looper.getMainLooper())
+        val handler =
+            Handler(Looper.getMainLooper())
 
-        val finishedFlag = AtomicBoolean(false)
+        val finished =
+            AtomicBoolean(false)
 
-        fun finishSuccess(url: String) {
-
-            if (!finishedFlag.compareAndSet(false, true)) {
-                return
-            }
-
-            finished = true
-
-            handler.removeCallbacksAndMessages(null)
+        fun cleanup() {
 
             try {
                 discoveryListener?.let {
@@ -79,6 +74,15 @@ object ServerDiscovery {
             }
 
             multicastLock = null
+        }
+
+        fun success(url: String) {
+
+            if (!finished.compareAndSet(false, true)) {
+                return
+            }
+
+            cleanup()
 
             ApiConfig.SERVER_URL = url
 
@@ -87,35 +91,13 @@ object ServerDiscovery {
             }
         }
 
-        fun finishError(message: String) {
+        fun failure(message: String) {
 
-            if (!finishedFlag.compareAndSet(false, true)) {
+            if (!finished.compareAndSet(false, true)) {
                 return
             }
 
-            finished = true
-
-            handler.removeCallbacksAndMessages(null)
-
-            try {
-                discoveryListener?.let {
-                    nsdManager.stopServiceDiscovery(it)
-                }
-            } catch (_: Exception) {
-            }
-
-            discoveryListener = null
-
-            try {
-                multicastLock?.let {
-                    if (it.isHeld) {
-                        it.release()
-                    }
-                }
-            } catch (_: Exception) {
-            }
-
-            multicastLock = null
+            cleanup()
 
             handler.post {
                 onError(message)
@@ -123,7 +105,7 @@ object ServerDiscovery {
         }
 
         // ---------------------------------------------------------
-        // اجازه دریافت multicast برای mDNS
+        // فعال کردن multicast برای mDNS
         // ---------------------------------------------------------
 
         try {
@@ -141,24 +123,46 @@ object ServerDiscovery {
         }
 
         // ---------------------------------------------------------
-        // مرحله اول: mDNS
+        // اگر mDNS جواب نداد، Scan شبکه
         // ---------------------------------------------------------
 
-        val timeoutRunnable = Runnable {
+        val scanRunnable = Runnable {
 
-            if (finishedFlag.get()) {
+            if (finished.get()) {
                 return@Runnable
             }
 
-            // mDNS جواب نداد.
-            // حالا شبکه محلی را به صورت خودکار اسکن می‌کنیم.
-            startNetworkScan(
+            scanLocalNetwork(
                 appContext,
                 handler,
-                finishSuccess,
-                finishError
+                finished,
+                ::success,
+                ::failure
             )
         }
+
+        // ---------------------------------------------------------
+        // Timeout مربوط به mDNS
+        // ---------------------------------------------------------
+
+        val mdnsTimeout = Runnable {
+
+            if (finished.get()) {
+                return@Runnable
+            }
+
+            scanLocalNetwork(
+                appContext,
+                handler,
+                finished,
+                ::success,
+                ::failure
+            )
+        }
+
+        // ---------------------------------------------------------
+        // mDNS Discovery
+        // ---------------------------------------------------------
 
         discoveryListener =
             object : NsdManager.DiscoveryListener {
@@ -168,7 +172,7 @@ object ServerDiscovery {
                 ) {
 
                     handler.postDelayed(
-                        timeoutRunnable,
+                        mdnsTimeout,
                         DISCOVERY_TIMEOUT_MS
                     )
                 }
@@ -177,7 +181,7 @@ object ServerDiscovery {
                     serviceInfo: NsdServiceInfo
                 ) {
 
-                    if (finishedFlag.get()) {
+                    if (finished.get()) {
                         return
                     }
 
@@ -209,18 +213,20 @@ object ServerDiscovery {
 
                         nsdManager.resolveService(
                             serviceInfo,
-                            object : NsdManager.ResolveListener {
+                            object :
+                                NsdManager.ResolveListener {
 
                                 override fun onServiceResolved(
                                     resolvedInfo: NsdServiceInfo
                                 ) {
 
-                                    if (finishedFlag.get()) {
+                                    if (finished.get()) {
                                         return
                                     }
 
                                     val address =
-                                        resolvedInfo.host?.hostAddress
+                                        resolvedInfo.host
+                                            ?.hostAddress
 
                                     val port =
                                         resolvedInfo.port
@@ -232,7 +238,7 @@ object ServerDiscovery {
                                         return
                                     }
 
-                                    finishSuccess(
+                                    success(
                                         "http://$address:$port"
                                     )
                                 }
@@ -241,7 +247,7 @@ object ServerDiscovery {
                                     serviceInfo: NsdServiceInfo,
                                     errorCode: Int
                                 ) {
-                                    // ادامه Discovery
+                                    // ادامه جستجو
                                 }
                             }
                         )
@@ -265,18 +271,17 @@ object ServerDiscovery {
                     errorCode: Int
                 ) {
 
-                    if (finishedFlag.get()) {
+                    if (finished.get()) {
                         return
                     }
 
-                    // mDNS روی این دستگاه شروع نشد.
-                    // مستقیماً سراغ Scan شبکه می‌رویم.
                     handler.post {
-                        startNetworkScan(
+                        scanLocalNetwork(
                             appContext,
                             handler,
-                            finishSuccess,
-                            finishError
+                            finished,
+                            ::success,
+                            ::failure
                         )
                     }
                 }
@@ -298,94 +303,116 @@ object ServerDiscovery {
 
         } catch (_: Exception) {
 
-            startNetworkScan(
+            scanLocalNetwork(
                 appContext,
                 handler,
-                finishSuccess,
-                finishError
+                finished,
+                ::success,
+                ::failure
             )
         }
     }
 
     // =============================================================
-    // پیدا کردن شبکه فعلی و اسکن خودکار پورت 5001
+    // Scan خودکار شبکه محلی
     // =============================================================
 
-    private fun startNetworkScan(
+    private fun scanLocalNetwork(
         context: Context,
         handler: Handler,
+        finished: AtomicBoolean,
         onFound: (String) -> Unit,
         onError: (String) -> Unit
     ) {
+
+        if (finished.get()) {
+            return
+        }
 
         val connectivityManager =
             context.getSystemService(
                 Context.CONNECTIVITY_SERVICE
             ) as ConnectivityManager
 
-        val network: Network =
+        val network =
             connectivityManager.activeNetwork
-                ?: run {
-                    handler.post {
-                        onError("شبکه Wi-Fi پیدا نشد")
-                    }
-                    return
-                }
 
-        val linkProperties: LinkProperties =
+        if (network == null) {
+
+            handler.post {
+                onError(
+                    "شبکه Wi-Fi فعال پیدا نشد"
+                )
+            }
+
+            return
+        }
+
+        val linkProperties =
             connectivityManager.getLinkProperties(network)
-                ?: run {
-                    handler.post {
-                        onError("اطلاعات شبکه Wi-Fi پیدا نشد")
-                    }
-                    return
-                }
 
-        val localIp =
+        if (linkProperties == null) {
+
+            handler.post {
+                onError(
+                    "اطلاعات شبکه Wi-Fi پیدا نشد"
+                )
+            }
+
+            return
+        }
+
+        val localAddress =
             linkProperties.linkAddresses
-                .mapNotNull { it.address }
+                .mapNotNull {
+                    it.address
+                }
                 .filterIsInstance<Inet4Address>()
                 .firstOrNull {
                     !it.isLoopbackAddress &&
                     !it.isLinkLocalAddress
                 }
 
-        if (localIp == null) {
+        if (localAddress == null) {
 
             handler.post {
-                onError("آدرس شبکه گوشی پیدا نشد")
+                onError(
+                    "آدرس IP گوشی پیدا نشد"
+                )
             }
 
             return
         }
 
-        val addressBytes =
-            localIp.address
+        val bytes =
+            localAddress.address
 
-        val subnetPrefix =
-            "${addressBytes[0].toInt() and 0xFF}." +
-            "${addressBytes[1].toInt() and 0xFF}." +
-            "${addressBytes[2].toInt() and 0xFF}."
+        val prefix =
+            "${bytes[0].toInt() and 255}." +
+            "${bytes[1].toInt() and 255}." +
+            "${bytes[2].toInt() and 255}."
 
         val scanFinished =
             AtomicBoolean(false)
 
-        // ---------------------------------------------------------
-        // اسکن همزمان آدرس‌های شبکه
-        // ---------------------------------------------------------
-
         for (i in 1..254) {
 
-            if (scanFinished.get()) {
+            if (
+                finished.get() ||
+                scanFinished.get()
+            ) {
                 break
             }
 
             val candidate =
-                "$subnetPrefix$i"
+                "$prefix$i"
 
             executor.execute {
 
-                if (scanFinished.get()) {
+                if (
+                    finished.get() ||
+                    scanFinished.get()
+                ) {
                     return@execute
                 }
 
@@ -401,7 +428,8 @@ object ServerDiscovery {
                             CONNECTION_TIMEOUT_MS
                         )
 
-                        if (!scanFinished.compareAndSet(
+                        if (
+                            !scanFinished.compareAndSet(
                                 false,
                                 true
                             )
@@ -409,37 +437,38 @@ object ServerDiscovery {
                             return@use
                         }
 
-                        val url =
-                            "http://$candidate:$CRM_PORT"
-
-                        ApiConfig.SERVER_URL = url
-
                         handler.post {
-                            onFound(url)
+
+                            onFound(
+                                "http://$candidate:$CRM_PORT"
+                            )
                         }
                     }
 
                 } catch (_: Exception) {
-                    // این IP سرور CRM نیست.
+                    // این IP سرور نیست.
                 }
             }
         }
 
-        // اگر هیچ دستگاهی جواب نداد
-        handler.postDelayed({
+        handler.postDelayed(
+            {
 
-            if (!scanFinished.get()) {
+                if (
+                    !finished.get() &&
+                    !scanFinished.get()
+                ) {
 
-                scanFinished.set(true)
+                    scanFinished.set(true)
 
-                handler.post {
                     onError(
                         "سرور CRM در شبکه پیدا نشد"
                     )
                 }
-            }
 
-        }, 15000L)
+            },
+            SCAN_TIMEOUT_MS
+        )
     }
 }
 
