@@ -19,6 +19,7 @@ object ServerDiscovery {
         onError: (String) -> Unit
     ) {
         val appContext = context.applicationContext
+
         val nsdManager =
             appContext.getSystemService(Context.NSD_SERVICE) as NsdManager
 
@@ -28,18 +29,18 @@ object ServerDiscovery {
         val handler = Handler(Looper.getMainLooper())
 
         var finished = false
-        var discoveryListener: NsdManager.DiscoveryListener? = null
+        var listener: NsdManager.DiscoveryListener? = null
         var multicastLock: WifiManager.MulticastLock? = null
 
         fun cleanup() {
             try {
-                discoveryListener?.let {
+                listener?.let {
                     nsdManager.stopServiceDiscovery(it)
                 }
             } catch (_: Exception) {
             }
 
-            discoveryListener = null
+            listener = null
 
             try {
                 multicastLock?.let {
@@ -51,17 +52,6 @@ object ServerDiscovery {
             }
 
             multicastLock = null
-        }
-
-        fun fail(message: String) {
-            if (finished) return
-
-            finished = true
-            cleanup()
-
-            handler.post {
-                onError(message)
-            }
         }
 
         fun success(url: String) {
@@ -77,147 +67,170 @@ object ServerDiscovery {
             }
         }
 
+        fun failure(message: String) {
+            if (finished) return
+
+            finished = true
+            cleanup()
+
+            handler.post {
+                onError(message)
+            }
+        }
+
         try {
             multicastLock =
                 wifiManager.createMulticastLock("CRM_CallTracker")
 
             multicastLock?.setReferenceCounted(false)
             multicastLock?.acquire()
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            failure(
+                "خطا در فعال کردن MulticastLock: ${e.message}"
+            )
+            return
         }
 
-        val timeoutRunnable = Runnable {
-            fail("mDNS timeout: سرویس پیدا یا Resolve نشد")
+        val timeout = Runnable {
+            failure(
+                "mDNS timeout: در مدت 15 ثانیه هیچ سرویس CRM پیدا نشد"
+            )
         }
 
-        discoveryListener =
-            object : NsdManager.DiscoveryListener {
+        listener = object : NsdManager.DiscoveryListener {
 
-                override fun onDiscoveryStarted(serviceType: String) {
-                    handler.postDelayed(
-                        timeoutRunnable,
-                        TIMEOUT_MS
+            override fun onDiscoveryStarted(serviceType: String) {
+
+                handler.postDelayed(
+                    timeout,
+                    TIMEOUT_MS
+                )
+            }
+
+            override fun onServiceFound(
+                serviceInfo: NsdServiceInfo
+            ) {
+
+                if (finished) return
+
+                val name =
+                    serviceInfo.serviceName ?: ""
+
+                val type =
+                    serviceInfo.serviceType ?: ""
+
+                if (!name.startsWith(
+                        SERVICE_NAME,
+                        ignoreCase = true
                     )
+                ) {
+                    return
                 }
 
-                override fun onServiceFound(
-                    serviceInfo: NsdServiceInfo
+                if (!type.trimEnd('.').equals(
+                        SERVICE_TYPE.trimEnd('.'),
+                        ignoreCase = true
+                    )
                 ) {
-                    if (finished) return
+                    return
+                }
 
-                    val name =
-                        serviceInfo.serviceName ?: ""
+                try {
 
-                    val type =
-                        serviceInfo.serviceType ?: ""
+                    nsdManager.resolveService(
+                        serviceInfo,
+                        object : NsdManager.ResolveListener {
 
-                    val correctName =
-                        name.startsWith(
-                            SERVICE_NAME,
-                            ignoreCase = true
-                        )
+                            override fun onServiceResolved(
+                                resolvedInfo: NsdServiceInfo
+                            ) {
 
-                    val correctType =
-                        type.trimEnd('.').equals(
-                            SERVICE_TYPE.trimEnd('.'),
-                            ignoreCase = true
-                        )
+                                if (finished) return
 
-                    if (!correctName || !correctType) {
-                        return
-                    }
+                                val host =
+                                    resolvedInfo.host?.hostAddress
 
-                    try {
-                        nsdManager.resolveService(
-                            serviceInfo,
-                            object : NsdManager.ResolveListener {
+                                val port =
+                                    resolvedInfo.port
 
-                                override fun onServiceResolved(
-                                    resolvedInfo: NsdServiceInfo
-                                ) {
-                                    if (finished) return
-
-                                    val host =
-                                        resolvedInfo.host?.hostAddress
-
-                                    val port =
-                                        resolvedInfo.port
-
-                                    if (host.isNullOrBlank()) {
-                                        fail(
-                                            "mDNS Resolve شد ولی IP خالی است"
-                                        )
-                                        return
-                                    }
-
-                                    if (port <= 0) {
-                                        fail(
-                                            "mDNS Resolve شد ولی Port نامعتبر است"
-                                        )
-                                        return
-                                    }
-
-                                    success(
-                                        "http://$host:$port"
+                                if (host.isNullOrBlank()) {
+                                    failure(
+                                        "mDNS Resolve شد ولی IP خالی است"
                                     )
+                                    return
                                 }
 
-                                override fun onResolveFailed(
-                                    serviceInfo: NsdServiceInfo,
-                                    errorCode: Int
-                                ) {
-                                    fail(
-                                        "mDNS سرویس پیدا شد ولی Resolve شکست خورد. کد خطا: $errorCode"
+                                if (port <= 0) {
+                                    failure(
+                                        "mDNS Resolve شد ولی Port نامعتبر است: $port"
                                     )
+                                    return
                                 }
+
+                                success(
+                                    "http://$host:$port"
+                                )
                             }
-                        )
-                    } catch (e: Exception) {
-                        fail(
-                            "خطا در Resolve: ${
-                                e.message ?: "unknown"
-                            }"
-                        )
-                    }
-                }
 
-                override fun onServiceLost(
-                    serviceInfo: NsdServiceInfo
-                ) {
-                }
+                            override fun onResolveFailed(
+                                serviceInfo: NsdServiceInfo,
+                                errorCode: Int
+                            ) {
 
-                override fun onDiscoveryStopped(
-                    serviceType: String
-                ) {
-                }
-
-                override fun onStartDiscoveryFailed(
-                    serviceType: String,
-                    errorCode: Int
-                ) {
-                    fail(
-                        "شروع mDNS شکست خورد. کد خطا: $errorCode"
+                                failure(
+                                    "mDNS سرویس پیدا شد ولی Resolve شکست خورد. کد خطا: $errorCode"
+                                )
+                            }
+                        }
                     )
-                }
 
-                override fun onStopDiscoveryFailed(
-                    serviceType: String,
-                    errorCode: Int
-                ) {
+                } catch (e: Exception) {
+
+                    failure(
+                        "خطا هنگام Resolve سرویس mDNS: ${e.message}"
+                    )
                 }
             }
 
+            override fun onServiceLost(
+                serviceInfo: NsdServiceInfo
+            ) {
+            }
+
+            override fun onDiscoveryStopped(
+                serviceType: String
+            ) {
+            }
+
+            override fun onStartDiscoveryFailed(
+                serviceType: String,
+                errorCode: Int
+            ) {
+
+                failure(
+                    "شروع mDNS ناموفق بود. کد خطا: $errorCode"
+                )
+            }
+
+            override fun onStopDiscoveryFailed(
+                serviceType: String,
+                errorCode: Int
+            ) {
+            }
+        }
+
         try {
+
             nsdManager.discoverServices(
                 SERVICE_TYPE,
                 NsdManager.PROTOCOL_DNS_SD,
-                discoveryListener!!
+                listener!!
             )
+
         } catch (e: Exception) {
-            fail(
-                "خطا در شروع mDNS: ${
-                    e.message ?: "unknown"
-                }"
+
+            failure(
+                "خطا در شروع mDNS: ${e.message}"
             )
         }
     }
