@@ -3,170 +3,156 @@ package com.crm.calltracker
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.net.Uri
+import android.os.Build
 import android.os.Bundle
-import android.text.InputType
-import android.view.Gravity
+import android.provider.Settings
+import android.telephony.PhoneNumberUtils
+import android.view.View
+import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
-import android.widget.ScrollView
+import android.widget.ListView
 import android.widget.TextView
-import androidx.activity.ComponentActivity
-import androidx.core.app.ActivityCompat
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import java.util.Locale
 
-class MainActivity : ComponentActivity() {
+class MainActivity : AppCompatActivity() {
 
-    private val CALL_PERMISSION_CODE = 1001
-
-    private lateinit var rootLayout: LinearLayout
     private lateinit var serverInput: EditText
     private lateinit var loginButton: Button
     private lateinit var loginStatusText: TextView
 
+    private lateinit var loginLayout: LinearLayout
+    private lateinit var mainLayout: LinearLayout
+
+    private lateinit var customerListView: ListView
+    private lateinit var customerStatusText: TextView
+
     private var customers = mutableListOf<Customer>()
+    private var customerNames = mutableListOf<String>()
 
-    private var selectedCustomer: Customer? = null
+    private val nearbyWifiPermissionLauncher =
+        registerForActivityResult(
+            ActivityResultContracts.RequestPermission()
+        ) { granted ->
 
-    private lateinit var selectedCustomerText: TextView
-    private lateinit var selectedPhoneText: TextView
-    private lateinit var customerListLayout: LinearLayout
-    private lateinit var searchInput: EditText
-    private lateinit var callButton: Button
-    private lateinit var mainStatusText: TextView
+            if (granted) {
+
+                discoverServer()
+
+            } else {
+
+                loginStatusText.text =
+                    "برای پیدا کردن خودکار CRM، " +
+                    "مجوز «دستگاه‌های نزدیک» لازم است."
+
+                loginButton.isEnabled = true
+            }
+        }
+
+    private val callPermissionLauncher =
+        registerForActivityResult(
+            ActivityResultContracts.RequestMultiplePermissions()
+        ) { permissions ->
+
+            val phoneGranted =
+                permissions[Manifest.permission.CALL_PHONE] == true
+
+            val stateGranted =
+                permissions[Manifest.permission.READ_PHONE_STATE] == true
+
+            if (!phoneGranted || !stateGranted) {
+
+                // در صورت نیاز دوباره از کاربر درخواست می‌کنیم.
+                checkCallPermission()
+            }
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        setContentView(R.layout.activity_main)
+
+        initializeViews()
 
         checkCallPermission()
 
         showLoginPage()
 
-        discoverServer()
+        checkNearbyWifiPermissionAndDiscover()
     }
 
-    // =========================================================
-    // LOGIN PAGE
-    // =========================================================
+    private fun initializeViews() {
 
-    private fun showLoginPage() {
+        serverInput =
+            findViewById(R.id.serverInput)
 
-        rootLayout = LinearLayout(this)
-        rootLayout.orientation = LinearLayout.VERTICAL
-        rootLayout.setPadding(40, 60, 40, 40)
+        loginButton =
+            findViewById(R.id.loginButton)
 
-        val title = TextView(this)
-        title.text = "CRM CallTracker"
-        title.textSize = 26f
-        title.gravity = Gravity.CENTER
-        title.setPadding(0, 0, 0, 30)
+        loginStatusText =
+            findViewById(R.id.loginStatusText)
 
-        loginStatusText = TextView(this)
-        loginStatusText.text =
-            "در حال پیدا کردن سرور CRM..."
-        loginStatusText.textSize = 16f
-        loginStatusText.setPadding(0, 0, 0, 20)
+        loginLayout =
+            findViewById(R.id.loginLayout)
 
-        serverInput = EditText(this)
-        serverInput.hint = "آدرس CRM"
-        serverInput.setText(ApiConfig.SERVER_URL)
+        mainLayout =
+            findViewById(R.id.mainLayout)
 
-        val usernameInput = EditText(this)
-        usernameInput.hint = "نام کاربری"
+        customerListView =
+            findViewById(R.id.customerListView)
 
-        val passwordInput = EditText(this)
-        passwordInput.hint = "رمز عبور"
-        passwordInput.inputType =
-            InputType.TYPE_CLASS_TEXT or
-            InputType.TYPE_TEXT_VARIATION_PASSWORD
-
-        loginButton = Button(this)
-        loginButton.text = "ورود به CRM"
-        loginButton.isEnabled =
-            ApiConfig.SERVER_URL.isNotEmpty()
-
-        rootLayout.addView(title)
-        rootLayout.addView(loginStatusText)
-        rootLayout.addView(serverInput)
-        rootLayout.addView(usernameInput)
-        rootLayout.addView(passwordInput)
-        rootLayout.addView(loginButton)
-
-        setContentView(rootLayout)
+        customerStatusText =
+            findViewById(R.id.customerStatusText)
 
         loginButton.setOnClickListener {
 
-            val serverUrl =
-                serverInput.text.toString().trim()
+            login()
+        }
+    }
 
-            val username =
-                usernameInput.text.toString().trim()
+    private fun checkNearbyWifiPermissionAndDiscover() {
 
-            val password =
-                passwordInput.text.toString()
+        if (Build.VERSION.SDK_INT <
+            Build.VERSION_CODES.TIRAMISU
+        ) {
 
-            if (serverUrl.isEmpty()) {
-                loginStatusText.text =
-                    "آدرس CRM وارد نشده است"
-                return@setOnClickListener
-            }
+            discoverServer()
 
-            if (username.isEmpty()) {
-                loginStatusText.text =
-                    "نام کاربری را وارد کنید"
-                return@setOnClickListener
-            }
+            return
+        }
 
-            if (password.isEmpty()) {
-                loginStatusText.text =
-                    "رمز عبور را وارد کنید"
-                return@setOnClickListener
-            }
+        val granted =
+            ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.NEARBY_WIFI_DEVICES
+            ) == PackageManager.PERMISSION_GRANTED
+
+        if (granted) {
+
+            discoverServer()
+
+        } else {
 
             loginStatusText.text =
-                "در حال ورود به CRM..."
+                "برای پیدا کردن خودکار سرور CRM، " +
+                "مجوز «دستگاه‌های نزدیک» لازم است."
 
-            loginButton.isEnabled = false
-
-            LoginApi.login(
-                serverUrl = serverUrl,
-                username = username,
-                password = password,
-
-                onSuccess = { token, fullName ->
-
-                    runOnUiThread {
-
-                        ApiConfig.SERVER_URL =
-                            serverUrl.trimEnd('/')
-
-                        ApiConfig.AUTH_TOKEN =
-                            token
-
-                        showMainPage(fullName)
-                    }
-                },
-
-                onError = { message ->
-
-                    runOnUiThread {
-
-                        loginStatusText.text =
-                            "خطا: $message"
-
-                        loginButton.isEnabled = true
-                    }
-                }
+            nearbyWifiPermissionLauncher.launch(
+                Manifest.permission.NEARBY_WIFI_DEVICES
             )
         }
     }
 
-    // =========================================================
-    // SERVER DISCOVERY
-    // =========================================================
-
     private fun discoverServer() {
+
+        loginStatusText.text =
+            "در حال پیدا کردن سرور CRM..."
+
+        loginButton.isEnabled = false
 
         ServerDiscovery.findServer(
 
@@ -184,7 +170,8 @@ class MainActivity : ComponentActivity() {
                     )
 
                     loginStatusText.text =
-                        "سرور CRM پیدا شد:\n${ApiConfig.SERVER_URL}"
+                        "سرور CRM پیدا شد:\n" +
+                        ApiConfig.SERVER_URL
 
                     loginButton.isEnabled = true
                 }
@@ -203,445 +190,236 @@ class MainActivity : ComponentActivity() {
         )
     }
 
-    // =========================================================
-    // MAIN PAGE
-    // =========================================================
+    private fun showLoginPage() {
 
-    private fun showMainPage(fullName: String) {
+        loginLayout.visibility =
+            View.VISIBLE
 
-        rootLayout = LinearLayout(this)
-        rootLayout.orientation = LinearLayout.VERTICAL
-        rootLayout.setPadding(30, 40, 30, 30)
+        mainLayout.visibility =
+            View.GONE
 
-        val title = TextView(this)
-        title.text = "CRM CallTracker"
-        title.textSize = 26f
-        title.gravity = Gravity.CENTER
-        title.setPadding(0, 0, 0, 15)
+        loginStatusText.text =
+            "در حال پیدا کردن سرور CRM..."
 
-        val welcomeText = TextView(this)
-
-        welcomeText.text =
-            if (fullName.isNotEmpty()) {
-                "خوش آمدید $fullName"
-            } else {
-                "ورود موفق"
-            }
-
-        welcomeText.textSize = 20f
-        welcomeText.gravity = Gravity.CENTER
-        welcomeText.setPadding(0, 0, 0, 20)
-
-        searchInput = EditText(this)
-        searchInput.hint =
-            "🔎 جستجوی مشتری..."
-        searchInput.inputType =
-            InputType.TYPE_CLASS_TEXT
-
-        selectedCustomerText = TextView(this)
-        selectedCustomerText.text =
-            "مشتری انتخاب نشده است"
-        selectedCustomerText.textSize = 18f
-        selectedCustomerText.setPadding(
-            0, 20, 0, 5
-        )
-
-        selectedPhoneText = TextView(this)
-        selectedPhoneText.text =
-            "شماره تلفن: -"
-        selectedPhoneText.textSize = 16f
-        selectedPhoneText.setPadding(
-            0, 0, 0, 15
-        )
-
-        callButton = Button(this)
-        callButton.text = "📞 تماس"
-        callButton.isEnabled = false
-
-        mainStatusText = TextView(this)
-        mainStatusText.text =
-            "در حال دریافت مشتری‌ها..."
-        mainStatusText.textSize = 15f
-        mainStatusText.setPadding(
-            0, 10, 0, 10
-        )
-
-        customerListLayout = LinearLayout(this)
-        customerListLayout.orientation =
-            LinearLayout.VERTICAL
-
-        val scrollView = ScrollView(this)
-
-        scrollView.addView(
-            customerListLayout
-        )
-
-        rootLayout.addView(title)
-        rootLayout.addView(welcomeText)
-        rootLayout.addView(searchInput)
-        rootLayout.addView(selectedCustomerText)
-        rootLayout.addView(selectedPhoneText)
-        rootLayout.addView(callButton)
-        rootLayout.addView(mainStatusText)
-
-        rootLayout.addView(
-            scrollView,
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                0,
-                1f
-            )
-        )
-
-        setContentView(rootLayout)
-
-        searchInput.addTextChangedListener(
-            SimpleTextWatcher {
-                filterCustomers(it)
-            }
-        )
-
-        callButton.setOnClickListener {
-
-            val customer =
-                selectedCustomer
-
-            if (customer == null) {
-                mainStatusText.text =
-                    "لطفاً ابتدا یک مشتری انتخاب کنید"
-                return@setOnClickListener
-            }
-
-            if (customer.phone.isEmpty()) {
-                mainStatusText.text =
-                    "برای این مشتری شماره تلفن ثبت نشده است"
-                return@setOnClickListener
-            }
-
-            makeCall(
-                customer = customer
-            )
-        }
-
-        loadCustomers()
+        loginButton.isEnabled = false
     }
 
-    // =========================================================
-    // LOAD CUSTOMERS
-    // =========================================================
+    private fun login() {
+
+        val serverUrl =
+            serverInput.text
+                .toString()
+                .trim()
+                .trimEnd('/')
+
+        if (serverUrl.isBlank()) {
+
+            loginStatusText.text =
+                "آدرس سرور CRM را وارد کنید."
+
+            return
+        }
+
+        if (
+            !serverUrl.startsWith("http://") &&
+            !serverUrl.startsWith("https://")
+        ) {
+
+            loginStatusText.text =
+                "آدرس باید با http:// یا https:// شروع شود."
+
+            return
+        }
+
+        ApiConfig.SERVER_URL =
+            serverUrl
+
+        loginButton.isEnabled = false
+
+        loginStatusText.text =
+            "در حال ورود..."
+
+        Thread {
+
+            try {
+
+                val result =
+                    LoginApi.login(
+                        serverUrl = ApiConfig.SERVER_URL
+                    )
+
+                runOnUiThread {
+
+                    loginButton.isEnabled = true
+
+                    if (result.success) {
+
+                        ApiConfig.AUTH_TOKEN =
+                            result.token ?: ""
+
+                        loginStatusText.text =
+                            "ورود موفق بود."
+
+                        showMainPage()
+
+                        loadCustomers()
+
+                    } else {
+
+                        loginStatusText.text =
+                            result.message
+                                ?: "ورود ناموفق بود."
+                    }
+                }
+
+            } catch (e: Exception) {
+
+                runOnUiThread {
+
+                    loginButton.isEnabled = true
+
+                    loginStatusText.text =
+                        "خطا در اتصال به CRM:\n" +
+                        (e.message ?: "خطای نامشخص")
+                }
+            }
+
+        }.start()
+    }
+
+    private fun showMainPage() {
+
+        loginLayout.visibility =
+            View.GONE
+
+        mainLayout.visibility =
+            View.VISIBLE
+    }
 
     private fun loadCustomers() {
 
-        val serverUrl =
-            ApiConfig.SERVER_URL.trim()
+        customerStatusText.text =
+            "در حال دریافت مشتریان..."
 
-        val token =
-            ApiConfig.AUTH_TOKEN.trim()
+        Thread {
 
-        if (serverUrl.isEmpty()) {
-            mainStatusText.text =
-                "آدرس CRM موجود نیست"
-            return
-        }
+            try {
 
-        if (token.isEmpty()) {
-            mainStatusText.text =
-                "توکن CRM موجود نیست"
-            return
-        }
-
-        mainStatusText.text =
-            "در حال دریافت لیست مشتری‌ها..."
-
-        CustomerApi.getCustomers(
-
-            serverUrl = serverUrl,
-
-            token = token,
-
-            onSuccess = { result ->
-
-                runOnUiThread {
-
-                    customers.clear()
-                    customers.addAll(result)
-
-                    mainStatusText.text =
-                        "${customers.size} مشتری دریافت شد"
-
-                    displayCustomers(customers)
-                }
-            },
-
-            onError = { message ->
-
-                runOnUiThread {
-
-                    mainStatusText.text =
-                        "خطا در دریافت مشتری‌ها: $message"
-                }
-            }
-        )
-    }
-
-    // =========================================================
-    // DISPLAY CUSTOMERS
-    // =========================================================
-
-    private fun displayCustomers(
-        list: List<Customer>
-    ) {
-
-        customerListLayout.removeAllViews()
-
-        if (list.isEmpty()) {
-
-            val emptyText = TextView(this)
-
-            emptyText.text =
-                "مشتری‌ای پیدا نشد"
-
-            emptyText.textSize = 17f
-            emptyText.setPadding(
-                0, 30, 0, 30
-            )
-
-            customerListLayout.addView(
-                emptyText
-            )
-
-            return
-        }
-
-        for (customer in list) {
-
-            val button = Button(this)
-
-            val company =
-                if (customer.companyName.isNotEmpty()) {
-                    " - ${customer.companyName}"
-                } else {
-                    ""
-                }
-
-            button.text =
-                "${customer.name}$company\n${customer.phone}"
-
-            button.textSize = 16f
-
-            button.setOnClickListener {
-
-                selectCustomer(customer)
-            }
-
-            customerListLayout.addView(
-                button,
-                LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
-                )
-            )
-        }
-    }
-
-    // =========================================================
-    // SEARCH
-    // =========================================================
-
-    private fun filterCustomers(
-        text: String
-    ) {
-
-        val query =
-            text.trim().lowercase()
-
-        if (query.isEmpty()) {
-
-            displayCustomers(customers)
-
-            return
-        }
-
-        val filtered =
-            customers.filter {
-
-                it.name.lowercase()
-                    .contains(query) ||
-
-                it.phone.lowercase()
-                    .contains(query) ||
-
-                it.companyName.lowercase()
-                    .contains(query) ||
-
-                it.city.lowercase()
-                    .contains(query) ||
-
-                it.id.toString()
-                    .contains(query)
-            }
-
-        displayCustomers(filtered)
-    }
-
-    // =========================================================
-    // SELECT CUSTOMER
-    // =========================================================
-
-    private fun selectCustomer(
-        customer: Customer
-    ) {
-
-        selectedCustomer =
-            customer
-
-        selectedCustomerText.text =
-            "مشتری انتخاب‌شده:\n${customer.name}"
-
-        selectedPhoneText.text =
-            "شماره تلفن: ${
-                if (customer.phone.isNotEmpty()) {
-                    customer.phone
-                } else {
-                    "ثبت نشده"
-                }
-            }\nشناسه مشتری: ${customer.id}"
-
-        callButton.isEnabled =
-            customer.phone.isNotEmpty()
-
-        mainStatusText.text =
-            "مشتری انتخاب شد؛ آماده تماس"
-    }
-
-    // =========================================================
-    // CALL
-    // =========================================================
-
-    private fun makeCall(
-        customer: Customer
-    ) {
-
-        if (
-            ContextCompat.checkSelfPermission(
-                this,
-                Manifest.permission.CALL_PHONE
-            ) != PackageManager.PERMISSION_GRANTED
-        ) {
-
-            checkCallPermission()
-
-            return
-        }
-
-        val serverUrl =
-            ApiConfig.SERVER_URL.trim()
-
-        val token =
-            ApiConfig.AUTH_TOKEN.trim()
-
-        if (serverUrl.isEmpty()) {
-
-            mainStatusText.text =
-                "سرور CRM پیدا نشده است"
-
-            return
-        }
-
-        if (token.isEmpty()) {
-
-            mainStatusText.text =
-                "توکن CRM موجود نیست؛ دوباره وارد شوید"
-
-            return
-        }
-
-        callButton.isEnabled = false
-
-        mainStatusText.text =
-            "در حال ثبت تماس در CRM..."
-
-        CallApi.startCall(
-
-            serverUrl = serverUrl,
-
-            token = token,
-
-            customerId = customer.id,
-
-            onSuccess = { callInfo ->
-
-                runOnUiThread {
-
-                    val prefs =
-                        getSharedPreferences(
-                            "call_tracker",
-                            MODE_PRIVATE
-                        )
-
-                    prefs.edit()
-                        .putInt(
-                            "call_id",
-                            callInfo.callId
-                        )
-                        .putInt(
-                            "communication_id",
-                            callInfo.communicationId ?: 0
-                        )
-                        .putString(
-                            "phone",
-                            callInfo.phone
-                        )
-                        .apply()
-
-                    mainStatusText.text =
-                        "تماس در CRM ثبت شد؛ در حال تماس..."
-
-                    val intent = Intent(
-                        Intent.ACTION_CALL,
-                        Uri.parse(
-                            "tel:${callInfo.phone}"
-                        )
+                val result =
+                    CallApi.getCustomers(
+                        ApiConfig.SERVER_URL,
+                        ApiConfig.AUTH_TOKEN
                     )
 
-                    try {
+                runOnUiThread {
 
-                        startActivity(intent)
+                    if (result.success) {
 
-                        mainStatusText.text =
-                            "در حال تماس با ${callInfo.phone}"
+                        customers =
+                            result.customers
+                                ?.toMutableList()
+                                ?: mutableListOf()
 
-                    } catch (_: Exception) {
+                        customerNames.clear()
 
-                        mainStatusText.text =
-                            "برقراری تماس انجام نشد"
+                        customers.forEach { customer ->
 
-                        callButton.isEnabled =
-                            true
+                            customerNames.add(
+                                customer.name
+                                    ?: customer.phone
+                                    ?: "مشتری"
+                            )
+                        }
+
+                        val adapter =
+                            ArrayAdapter(
+                                this,
+                                android.R.layout.simple_list_item_1,
+                                customerNames
+                            )
+
+                        customerListView.adapter =
+                            adapter
+
+                        customerStatusText.text =
+                            "تعداد مشتریان: ${customers.size}"
+
+                    } else {
+
+                        customerStatusText.text =
+                            result.message
+                                ?: "دریافت مشتریان ناموفق بود."
                     }
                 }
-            },
 
-            onError = { message ->
+            } catch (e: Exception) {
 
                 runOnUiThread {
 
-                    mainStatusText.text =
-                        "خطا در ثبت تماس: $message"
-
-                    callButton.isEnabled =
-                        true
+                    customerStatusText.text =
+                        "خطا در دریافت مشتریان:\n" +
+                        (e.message ?: "خطای نامشخص")
                 }
             }
-        )
+
+        }.start()
     }
 
-    // =========================================================
-    // PERMISSIONS
-    // =========================================================
+    private fun makeCall(customer: Customer) {
+
+        val phone =
+            customer.phone?.trim()
+
+        if (phone.isNullOrBlank()) {
+
+            return
+        }
+
+        val normalizedPhone =
+            PhoneNumberUtils.normalizeNumber(
+                phone
+            )
+
+        try {
+
+            val intent =
+                Intent(
+                    Intent.ACTION_CALL
+                )
+
+            intent.data =
+                android.net.Uri.parse(
+                    "tel:$normalizedPhone"
+                )
+
+            startActivity(intent)
+
+        } catch (e: Exception) {
+
+            try {
+
+                val intent =
+                    Intent(
+                        Intent.ACTION_DIAL
+                    )
+
+                intent.data =
+                    android.net.Uri.parse(
+                        "tel:$normalizedPhone"
+                    )
+
+                startActivity(intent)
+
+            } catch (_: Exception) {
+            }
+        }
+    }
 
     private fun checkCallPermission() {
 
+        val permissions =
+            mutableListOf<String>()
+
         if (
             ContextCompat.checkSelfPermission(
                 this,
@@ -649,49 +427,35 @@ class MainActivity : ComponentActivity() {
             ) != PackageManager.PERMISSION_GRANTED
         ) {
 
-            ActivityCompat.requestPermissions(
+            permissions.add(
+                Manifest.permission.CALL_PHONE
+            )
+        }
+
+        if (
+            ContextCompat.checkSelfPermission(
                 this,
+                Manifest.permission.READ_PHONE_STATE
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
 
-                arrayOf(
-                    Manifest.permission.CALL_PHONE,
-                    Manifest.permission.READ_PHONE_STATE
-                ),
+            permissions.add(
+                Manifest.permission.READ_PHONE_STATE
+            )
+        }
 
-                CALL_PERMISSION_CODE
+        if (permissions.isNotEmpty()) {
+
+            callPermissionLauncher.launch(
+                permissions.toTypedArray()
             )
         }
     }
 
-    // =========================================================
-    // SIMPLE TEXT WATCHER
-    // =========================================================
+    override fun onResume() {
+        super.onResume()
 
-    private class SimpleTextWatcher(
-        private val onTextChangedAction: (String) -> Unit
-    ) : android.text.TextWatcher {
-
-        override fun beforeTextChanged(
-            s: CharSequence?,
-            start: Int,
-            count: Int,
-            after: Int
-        ) {
-        }
-
-        override fun onTextChanged(
-            s: CharSequence?,
-            start: Int,
-            before: Int,
-            count: Int
-        ) {
-            onTextChangedAction(
-                s?.toString() ?: ""
-            )
-        }
-
-        override fun afterTextChanged(
-            s: android.text.Editable?
-        ) {
-        }
+        // اینجا عمداً discovery دوباره اجرا نمی‌شود.
+        // فقط هنگام شروع صفحه Login انجام می‌شود.
     }
 }
