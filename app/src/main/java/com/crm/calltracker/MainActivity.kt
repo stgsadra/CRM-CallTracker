@@ -3,25 +3,37 @@ package com.crm.calltracker
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.provider.Settings
 import android.telephony.PhoneNumberUtils
+import android.view.Gravity
 import android.view.View
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ListView
+import android.widget.ScrollView
 import android.widget.TextView
+import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
-import java.util.Locale
 
-class MainActivity : AppCompatActivity() {
+class MainActivity : ComponentActivity() {
+
+    companion object {
+        private const val PREFS = "call_tracker"
+
+        private const val KEY_CALL_ID = "call_id"
+        private const val KEY_COMMUNICATION_ID = "communication_id"
+        private const val KEY_PHONE = "phone"
+    }
 
     private lateinit var serverInput: EditText
+    private lateinit var usernameInput: EditText
+    private lateinit var passwordInput: EditText
+
     private lateinit var loginButton: Button
     private lateinit var loginStatusText: TextView
 
@@ -40,14 +52,11 @@ class MainActivity : AppCompatActivity() {
         ) { granted ->
 
             if (granted) {
-
                 discoverServer()
-
             } else {
-
                 loginStatusText.text =
-                    "برای پیدا کردن خودکار CRM، " +
-                    "مجوز «دستگاه‌های نزدیک» لازم است."
+                    "مجوز «دستگاه‌های نزدیک» داده نشد.\n" +
+                    "می‌توانید آدرس سرور را دستی وارد کنید."
 
                 loginButton.isEnabled = true
             }
@@ -65,18 +74,16 @@ class MainActivity : AppCompatActivity() {
                 permissions[Manifest.permission.READ_PHONE_STATE] == true
 
             if (!phoneGranted || !stateGranted) {
-
-                // در صورت نیاز دوباره از کاربر درخواست می‌کنیم.
-                checkCallPermission()
+                loginStatusText.text =
+                    "برای برقراری تماس و تشخیص وضعیت تماس، " +
+                    "مجوزهای تلفن لازم است."
             }
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        setContentView(R.layout.activity_main)
-
-        initializeViews()
+        buildUserInterface()
 
         checkCallPermission()
 
@@ -85,32 +92,206 @@ class MainActivity : AppCompatActivity() {
         checkNearbyWifiPermissionAndDiscover()
     }
 
-    private fun initializeViews() {
+    private fun buildUserInterface() {
 
-        serverInput =
-            findViewById(R.id.serverInput)
+        val root =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(32, 32, 32, 32)
+            }
 
-        loginButton =
-            findViewById(R.id.loginButton)
+        val scrollView =
+            ScrollView(this).apply {
+                addView(root)
+            }
 
-        loginStatusText =
-            findViewById(R.id.loginStatusText)
+        setContentView(scrollView)
+
+        // ---------------------------------------------------------
+        // LOGIN LAYOUT
+        // ---------------------------------------------------------
 
         loginLayout =
-            findViewById(R.id.loginLayout)
+            LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER_HORIZONTAL
+            }
 
-        mainLayout =
-            findViewById(R.id.mainLayout)
+        root.addView(
+            loginLayout,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        )
 
-        customerListView =
-            findViewById(R.id.customerListView)
+        val title =
+            TextView(this).apply {
+                text = "CRM CallTracker"
+                textSize = 26f
+                gravity = Gravity.CENTER
+                setPadding(0, 20, 0, 30)
+            }
 
-        customerStatusText =
-            findViewById(R.id.customerStatusText)
+        loginLayout.addView(title)
+
+        serverInput =
+            EditText(this).apply {
+                hint = "آدرس سرور CRM"
+                setSingleLine(true)
+                textSize = 16f
+            }
+
+        loginLayout.addView(
+            serverInput,
+            createFieldParams()
+        )
+
+        usernameInput =
+            EditText(this).apply {
+                hint = "نام کاربری"
+                setSingleLine(true)
+                textSize = 16f
+            }
+
+        loginLayout.addView(
+            usernameInput,
+            createFieldParams()
+        )
+
+        passwordInput =
+            EditText(this).apply {
+                hint = "رمز عبور"
+                setSingleLine(true)
+                inputType =
+                    android.text.InputType.TYPE_CLASS_TEXT or
+                    android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+                textSize = 16f
+            }
+
+        loginLayout.addView(
+            passwordInput,
+            createFieldParams()
+        )
+
+        loginButton =
+            Button(this).apply {
+                text = "ورود به CRM"
+                isEnabled = false
+            }
+
+        loginLayout.addView(
+            loginButton,
+            createButtonParams()
+        )
+
+        loginStatusText =
+            TextView(this).apply {
+                text = "در حال پیدا کردن سرور CRM..."
+                textSize = 15f
+                gravity = Gravity.CENTER
+                setPadding(0, 20, 0, 20)
+            }
+
+        loginLayout.addView(
+            loginStatusText,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        )
 
         loginButton.setOnClickListener {
-
             login()
+        }
+
+        // ---------------------------------------------------------
+        // MAIN LAYOUT
+        // ---------------------------------------------------------
+
+        mainLayout =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                visibility = View.GONE
+            }
+
+        root.addView(
+            mainLayout,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.MATCH_PARENT
+            )
+        )
+
+        val mainTitle =
+            TextView(this).apply {
+                text = "مشتریان CRM"
+                textSize = 24f
+                gravity = Gravity.CENTER
+                setPadding(0, 20, 0, 20)
+            }
+
+        mainLayout.addView(mainTitle)
+
+        customerStatusText =
+            TextView(this).apply {
+                text = "در حال دریافت مشتریان..."
+                textSize = 15f
+                gravity = Gravity.CENTER
+                setPadding(0, 10, 0, 20)
+            }
+
+        mainLayout.addView(
+            customerStatusText,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        )
+
+        customerListView =
+            ListView(this).apply {
+                dividerHeight = 1
+            }
+
+        mainLayout.addView(
+            customerListView,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                0,
+                1f
+            )
+        )
+
+        customerListView.setOnItemClickListener { _, _, position, _ ->
+
+            if (position >= 0 && position < customers.size) {
+                startCustomerCall(
+                    customers[position]
+                )
+            }
+        }
+    }
+
+    private fun createFieldParams():
+        LinearLayout.LayoutParams {
+
+        return LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply {
+            setMargins(0, 0, 0, 16)
+        }
+    }
+
+    private fun createButtonParams():
+        LinearLayout.LayoutParams {
+
+        return LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply {
+            setMargins(0, 10, 0, 10)
         }
     }
 
@@ -121,7 +302,6 @@ class MainActivity : AppCompatActivity() {
         ) {
 
             discoverServer()
-
             return
         }
 
@@ -140,6 +320,8 @@ class MainActivity : AppCompatActivity() {
             loginStatusText.text =
                 "برای پیدا کردن خودکار سرور CRM، " +
                 "مجوز «دستگاه‌های نزدیک» لازم است."
+
+            loginButton.isEnabled = false
 
             nearbyWifiPermissionLauncher.launch(
                 Manifest.permission.NEARBY_WIFI_DEVICES
@@ -212,6 +394,15 @@ class MainActivity : AppCompatActivity() {
                 .trim()
                 .trimEnd('/')
 
+        val username =
+            usernameInput.text
+                .toString()
+                .trim()
+
+        val password =
+            passwordInput.text
+                .toString()
+
         if (serverUrl.isBlank()) {
 
             loginStatusText.text =
@@ -226,7 +417,23 @@ class MainActivity : AppCompatActivity() {
         ) {
 
             loginStatusText.text =
-                "آدرس باید با http:// یا https:// شروع شود."
+                "آدرس سرور باید با http:// یا https:// شروع شود."
+
+            return
+        }
+
+        if (username.isBlank()) {
+
+            loginStatusText.text =
+                "نام کاربری را وارد کنید."
+
+            return
+        }
+
+        if (password.isBlank()) {
+
+            loginStatusText.text =
+                "رمز عبور را وارد کنید."
 
             return
         }
@@ -237,54 +444,49 @@ class MainActivity : AppCompatActivity() {
         loginButton.isEnabled = false
 
         loginStatusText.text =
-            "در حال ورود..."
+            "در حال ورود به CRM..."
 
-        Thread {
+        LoginApi.login(
 
-            try {
+            serverUrl = ApiConfig.SERVER_URL,
 
-                val result =
-                    LoginApi.login(
-                        serverUrl = ApiConfig.SERVER_URL
-                    )
+            username = username,
+
+            password = password,
+
+            onSuccess = { token, fullName ->
 
                 runOnUiThread {
 
+                    ApiConfig.AUTH_TOKEN =
+                        token
+
                     loginButton.isEnabled = true
 
-                    if (result.success) {
-
-                        ApiConfig.AUTH_TOKEN =
-                            result.token ?: ""
-
-                        loginStatusText.text =
+                    loginStatusText.text =
+                        if (fullName.isNotBlank()) {
+                            "ورود موفق بود.\n$fullName"
+                        } else {
                             "ورود موفق بود."
+                        }
 
-                        showMainPage()
+                    showMainPage()
 
-                        loadCustomers()
-
-                    } else {
-
-                        loginStatusText.text =
-                            result.message
-                                ?: "ورود ناموفق بود."
-                    }
+                    loadCustomers()
                 }
+            },
 
-            } catch (e: Exception) {
+            onError = { message ->
 
                 runOnUiThread {
 
                     loginButton.isEnabled = true
 
                     loginStatusText.text =
-                        "خطا در اتصال به CRM:\n" +
-                        (e.message ?: "خطای نامشخص")
+                        "ورود ناموفق بود:\n$message"
                 }
             }
-
-        }.start()
+        )
     }
 
     private fun showMainPage() {
@@ -301,79 +503,199 @@ class MainActivity : AppCompatActivity() {
         customerStatusText.text =
             "در حال دریافت مشتریان..."
 
-        Thread {
+        CustomerApi.getCustomers(
 
-            try {
+            serverUrl =
+                ApiConfig.SERVER_URL,
 
-                val result =
-                    CallApi.getCustomers(
-                        ApiConfig.SERVER_URL,
-                        ApiConfig.AUTH_TOKEN
-                    )
+            token =
+                ApiConfig.AUTH_TOKEN,
+
+            onSuccess = { list ->
 
                 runOnUiThread {
 
-                    if (result.success) {
+                    customers =
+                        list.toMutableList()
 
-                        customers =
-                            result.customers
-                                ?.toMutableList()
-                                ?: mutableListOf()
+                    customerNames.clear()
 
-                        customerNames.clear()
+                    customers.forEach { customer ->
 
-                        customers.forEach { customer ->
+                        val displayName =
+                            when {
 
-                            customerNames.add(
-                                customer.name
-                                    ?: customer.phone
-                                    ?: "مشتری"
-                            )
-                        }
+                                customer.name.isNotBlank() &&
+                                customer.companyName.isNotBlank() ->
+                                    "${customer.name} - ${customer.companyName}"
 
-                        val adapter =
-                            ArrayAdapter(
-                                this,
-                                android.R.layout.simple_list_item_1,
-                                customerNames
-                            )
+                                customer.name.isNotBlank() ->
+                                    customer.name
 
-                        customerListView.adapter =
-                            adapter
+                                customer.phone.isNotBlank() ->
+                                    customer.phone
 
-                        customerStatusText.text =
-                            "تعداد مشتریان: ${customers.size}"
+                                else ->
+                                    "مشتری"
+                            }
 
-                    } else {
-
-                        customerStatusText.text =
-                            result.message
-                                ?: "دریافت مشتریان ناموفق بود."
+                        customerNames.add(
+                            displayName
+                        )
                     }
-                }
 
-            } catch (e: Exception) {
+                    val adapter =
+                        ArrayAdapter(
+                            this,
+                            android.R.layout.simple_list_item_1,
+                            customerNames
+                        )
+
+                    customerListView.adapter =
+                        adapter
+
+                    customerStatusText.text =
+                        "تعداد مشتریان: ${customers.size}"
+                }
+            },
+
+            onError = { message ->
 
                 runOnUiThread {
 
                     customerStatusText.text =
-                        "خطا در دریافت مشتریان:\n" +
-                        (e.message ?: "خطای نامشخص")
+                        "خطا در دریافت مشتریان:\n$message"
                 }
             }
-
-        }.start()
+        )
     }
 
-    private fun makeCall(customer: Customer) {
+    private fun startCustomerCall(
+        customer: Customer
+    ) {
 
         val phone =
-            customer.phone?.trim()
+            customer.phone
+                .trim()
 
-        if (phone.isNullOrBlank()) {
+        if (phone.isBlank()) {
+
+            customerStatusText.text =
+                "شماره تلفن این مشتری ثبت نشده است."
 
             return
         }
+
+        val normalizedPhone =
+            PhoneNumberUtils.normalizeNumber(
+                phone
+            )
+
+        if (normalizedPhone.isBlank()) {
+
+            customerStatusText.text =
+                "شماره تلفن مشتری معتبر نیست."
+
+            return
+        }
+
+        val serverUrl =
+            ApiConfig.SERVER_URL.trim()
+
+        val token =
+            ApiConfig.AUTH_TOKEN.trim()
+
+        if (
+            serverUrl.isBlank() ||
+            token.isBlank()
+        ) {
+
+            customerStatusText.text =
+                "اتصال CRM معتبر نیست. دوباره وارد شوید."
+
+            return
+        }
+
+        customerStatusText.text =
+            "در حال ثبت شروع تماس..."
+
+        CallApi.startCall(
+
+            serverUrl = serverUrl,
+
+            token = token,
+
+            customerId = customer.id,
+
+            onSuccess = { callInfo ->
+
+                saveCallInfo(
+                    callInfo = callInfo
+                )
+
+                runOnUiThread {
+
+                    customerStatusText.text =
+                        "تماس با ${customer.name} در حال برقراری است..."
+
+                    makePhoneCall(
+                        callInfo.phone
+                    )
+                }
+            },
+
+            onError = { message ->
+
+                runOnUiThread {
+
+                    customerStatusText.text =
+                        "خطا در شروع تماس:\n$message"
+                }
+            }
+        )
+    }
+
+    private fun saveCallInfo(
+        callInfo: CallInfo
+    ) {
+
+        val prefs =
+            getSharedPreferences(
+                PREFS,
+                MODE_PRIVATE
+            )
+
+        val editor =
+            prefs.edit()
+                .putInt(
+                    KEY_CALL_ID,
+                    callInfo.callId
+                )
+                .putString(
+                    KEY_PHONE,
+                    callInfo.phone
+                )
+
+        if (callInfo.communicationId != null) {
+
+            editor.putInt(
+                KEY_COMMUNICATION_ID,
+                callInfo.communicationId
+            )
+
+        } else {
+
+            editor.remove(
+                KEY_COMMUNICATION_ID
+            )
+        }
+
+        editor.apply()
+    }
+
+    private fun makePhoneCall(
+        phone: String
+    ) {
 
         val normalizedPhone =
             PhoneNumberUtils.normalizeNumber(
@@ -385,12 +707,24 @@ class MainActivity : AppCompatActivity() {
             val intent =
                 Intent(
                     Intent.ACTION_CALL
-                )
+                ).apply {
 
-            intent.data =
-                android.net.Uri.parse(
-                    "tel:$normalizedPhone"
-                )
+                    data =
+                        Uri.parse(
+                            "tel:$normalizedPhone"
+                        )
+                }
+
+            if (
+                ContextCompat.checkSelfPermission(
+                    this,
+                    Manifest.permission.CALL_PHONE
+                ) != PackageManager.PERMISSION_GRANTED
+            ) {
+
+                checkCallPermission()
+                return
+            }
 
             startActivity(intent)
 
@@ -401,16 +735,25 @@ class MainActivity : AppCompatActivity() {
                 val intent =
                     Intent(
                         Intent.ACTION_DIAL
-                    )
+                    ).apply {
 
-                intent.data =
-                    android.net.Uri.parse(
-                        "tel:$normalizedPhone"
-                    )
+                        data =
+                            Uri.parse(
+                                "tel:$normalizedPhone"
+                            )
+                    }
 
                 startActivity(intent)
 
-            } catch (_: Exception) {
+            } catch (dialException: Exception) {
+
+                customerStatusText.text =
+                    "خطا در برقراری تماس:\n" +
+                    (
+                        dialException.message
+                            ?: e.message
+                            ?: "خطای نامشخص"
+                    )
             }
         }
     }
@@ -451,11 +794,5 @@ class MainActivity : AppCompatActivity() {
             )
         }
     }
-
-    override fun onResume() {
-        super.onResume()
-
-        // اینجا عمداً discovery دوباره اجرا نمی‌شود.
-        // فقط هنگام شروع صفحه Login انجام می‌شود.
-    }
 }
+
