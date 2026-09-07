@@ -77,32 +77,35 @@ object ServerDiscovery {
             }
         }
 
+        // فعال کردن دریافت بسته‌های multicast روی Wi-Fi
         try {
             multicastLock =
-                wifiManager.createMulticastLock("CRM_CallTracker")
+                wifiManager.createMulticastLock("CRM_CallTracker_mDNS")
 
             multicastLock?.setReferenceCounted(false)
-            multicastLock?.acquire()
+
+            if (multicastLock?.isHeld != true) {
+                multicastLock?.acquire()
+            }
 
         } catch (e: Exception) {
-
             failure(
-                "MulticastLock خطا داد: ${e.message}"
+                "فعال‌سازی MulticastLock ناموفق بود:\n${e.message}"
             )
             return
         }
 
         val timeout = Runnable {
             failure(
-                "Android هیچ سرویس mDNS با نوع _crm._tcp پیدا نکرد"
+                "Android هیچ سرویس mDNS با نوع _crm._tcp پیدا نکرد.\n\n" +
+                "CRM-Server._crm._tcp.local در شبکه منتشر می‌شود، " +
+                "اما Android آن را دریافت نکرد."
             )
         }
 
         listener = object : NsdManager.DiscoveryListener {
 
-            override fun onDiscoveryStarted(
-                serviceType: String
-            ) {
+            override fun onDiscoveryStarted(serviceType: String) {
 
                 handler.postDelayed(
                     timeout,
@@ -113,7 +116,6 @@ object ServerDiscovery {
             override fun onServiceFound(
                 serviceInfo: NsdServiceInfo
             ) {
-
                 if (finished) return
 
                 val name =
@@ -122,12 +124,14 @@ object ServerDiscovery {
                 val type =
                     serviceInfo.serviceType ?: ""
 
-                /*
-                 * فعلاً اسم سرویس را بررسی نمی‌کنیم.
-                 *
-                 * فقط اگر Android هر سرویس _crm._tcp
-                 * پیدا کند، آن را Resolve می‌کنیم.
-                 */
+                // فقط سرویس CRM را قبول کن
+                if (!name.equals(
+                        "CRM-Server",
+                        ignoreCase = true
+                    )
+                ) {
+                    return
+                }
 
                 if (!type.contains(
                         "_crm._tcp",
@@ -146,7 +150,6 @@ object ServerDiscovery {
                             override fun onServiceResolved(
                                 resolvedInfo: NsdServiceInfo
                             ) {
-
                                 if (finished) return
 
                                 val host =
@@ -156,23 +159,16 @@ object ServerDiscovery {
                                     resolvedInfo.port
 
                                 if (host.isNullOrBlank()) {
-
                                     failure(
-                                        "سرویس پیدا شد اما IP آن خالی است\n" +
-                                        "نام: $name\n" +
-                                        "نوع: $type"
+                                        "سرویس CRM پیدا شد ولی IP آن دریافت نشد."
                                     )
-
                                     return
                                 }
 
                                 if (port <= 0) {
-
                                     failure(
-                                        "سرویس پیدا شد اما Port نامعتبر است: $port\n" +
-                                        "نام: $name"
+                                        "سرویس CRM پیدا شد ولی Port نامعتبر است: $port"
                                     )
-
                                     return
                                 }
 
@@ -185,11 +181,9 @@ object ServerDiscovery {
                                 serviceInfo: NsdServiceInfo,
                                 errorCode: Int
                             ) {
-
                                 failure(
-                                    "سرویس mDNS پیدا شد ولی Resolve نشد.\n" +
-                                    "نام: ${serviceInfo.serviceName}\n" +
-                                    "نوع: ${serviceInfo.serviceType}\n" +
+                                    "سرویس CRM توسط Android پیدا شد، " +
+                                    "اما Resolve آن شکست خورد.\n\n" +
                                     "کد خطا: $errorCode"
                                 )
                             }
@@ -197,9 +191,8 @@ object ServerDiscovery {
                     )
 
                 } catch (e: Exception) {
-
                     failure(
-                        "خطا در Resolve mDNS:\n${e.message}"
+                        "خطا هنگام Resolve سرویس mDNS:\n${e.message}"
                     )
                 }
             }
@@ -218,10 +211,8 @@ object ServerDiscovery {
                 serviceType: String,
                 errorCode: Int
             ) {
-
                 failure(
-                    "شروع جستجوی mDNS شکست خورد.\n" +
-                    "نوع: $serviceType\n" +
+                    "شروع جستجوی mDNS در Android شکست خورد.\n\n" +
                     "کد خطا: $errorCode"
                 )
             }
