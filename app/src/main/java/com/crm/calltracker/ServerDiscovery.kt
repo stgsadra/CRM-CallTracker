@@ -4,34 +4,43 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.net.ConnectivityManager
+import android.net.LinkAddress
+import android.net.LinkProperties
 import android.net.Network
+import android.net.NetworkCapabilities
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import androidx.core.content.ContextCompat
+import java.io.BufferedReader
+import java.io.InputStreamReader
+import java.net.HttpURLConnection
+import java.net.Inet4Address
+import java.net.InetAddress
+import java.net.NetworkInterface
+import java.net.Socket
+import java.net.URL
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.concurrent.thread
 
 object ServerDiscovery {
 
     private const val SERVICE_TYPE = "_crm._tcp."
-    private const val TIMEOUT_MS = 15000L
+    private const val SERVER_PORT = 5001
+
+    private const val MDNS_TIMEOUT_MS = 15000L
+    private const val SCAN_TIMEOUT_MS = 15000L
 
     fun hasNearbyWifiPermission(context: Context): Boolean {
-
-        return if (
-            Build.VERSION.SDK_INT >=
-            Build.VERSION_CODES.TIRAMISU
-        ) {
-
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             ContextCompat.checkSelfPermission(
                 context,
                 Manifest.permission.NEARBY_WIFI_DEVICES
             ) == PackageManager.PERMISSION_GRANTED
-
         } else {
-
             true
         }
     }
@@ -41,57 +50,50 @@ object ServerDiscovery {
         onFound: (String) -> Unit,
         onError: (String) -> Unit
     ) {
+        val appContext = context.applicationContext
 
-        if (!hasNearbyWifiPermission(context)) {
-
+        if (!hasNearbyWifiPermission(appContext)) {
             onError(
-                "مجوز «دستگاه‌های نزدیک» برای mDNS داده نشده است."
+                "مجوز «دستگاه‌های نزدیک» برای پیدا کردن سرور داده نشده است."
             )
-
             return
         }
-
-        val appContext =
-            context.applicationContext
-
-        val nsdManager =
-            appContext.getSystemService(
-                Context.NSD_SERVICE
-            ) as NsdManager
 
         val connectivityManager =
             appContext.getSystemService(
                 Context.CONNECTIVITY_SERVICE
             ) as ConnectivityManager
 
+        val nsdManager =
+            appContext.getSystemService(
+                Context.NSD_SERVICE
+            ) as NsdManager
+
         val handler =
-            Handler(
-                Looper.getMainLooper()
-            )
+            Handler(Looper.getMainLooper())
+
+        val finished =
+            AtomicBoolean(false)
 
         val executor =
-            Executors.newSingleThreadExecutor()
+            Executors.newCachedThreadPool()
 
-        var finished = false
-
-        var listener:
+        var discoveryListener:
             NsdManager.DiscoveryListener? = null
 
-        fun cleanup() {
-
+        fun cleanupNsd() {
             try {
-
-                listener?.let {
-
-                    nsdManager.stopServiceDiscovery(
-                        it
-                    )
+                discoveryListener?.let {
+                    nsdManager.stopServiceDiscovery(it)
                 }
-
             } catch (_: Exception) {
             }
 
-            listener = null
+            discoveryListener = null
+        }
+
+        fun shutdown() {
+            cleanupNsd()
 
             try {
                 executor.shutdownNow()
@@ -99,63 +101,261 @@ object ServerDiscovery {
             }
         }
 
-        fun success(
-            url: String
-        ) {
-
-            if (finished) {
+        fun success(url: String) {
+            if (!finished.compareAndSet(false, true)) {
                 return
             }
 
-            finished = true
-
-            cleanup()
+            shutdown()
 
             val finalUrl =
                 url.trimEnd('/')
 
-            ApiConfig.SERVER_URL =
-                finalUrl
+            ApiConfig.SERVER_URL = finalUrl
 
             handler.post {
-
-                onFound(
-                    finalUrl
-                )
+                onFound(finalUrl)
             }
         }
 
-        fun failure(
-            message: String
-        ) {
-
-            if (finished) {
+        fun error(message: String) {
+            if (!finished.compareAndSet(false, true)) {
                 return
             }
 
-            finished = true
-
-            cleanup()
+            shutdown()
 
             handler.post {
-
-                onError(
-                    message
-                )
+                onError(message)
             }
         }
 
-        val timeoutRunnable =
-            Runnable {
+        fun startNetworkScan() {
 
-                failure(
-                    "Android در مدت ۱۵ ثانیه هیچ سرویس " +
-                    "_crm._tcp پیدا نکرد.\n\n" +
-                    "بررسی شد: Wi-Fi و مجوز دستگاه‌های نزدیک."
-                )
+            if (finished.get()) {
+                return
             }
 
-        listener =
+            thread {
+
+                try {
+
+                    val network =
+                        getWifiNetwork(connectivityManager)
+
+                    if (network == null) {
+                        error(
+                            "شبکه Wi-Fi فعال پیدا نشد."
+                        )
+                        return@thread
+                    }
+
+                    val linkProperties =
+                        connectivityManager.getLinkProperties(
+                            network
+                        )
+
+                    val candidates =
+                        buildCandidateAddresses(
+                            linkProperties
+                        )
+
+                    if (candidates.isEmpty()) {
+                        error(
+                            "آدرس‌های شبکه Wi-Fi برای جستجوی سرور پیدا نشد."
+                        )
+                        return@thread
+                    }
+
+                    val scanExecutor =
+                        Executors.newFixedThreadPool(32)
+
+                    val scanFinished =
+                        AtomicBoolean(false)
+
+                    val scanTimeout =
+                        handler.postDelayed(
+                            {
+                                if (
+                                    scanFinished.compareAndSet(
+                                        false,
+                                        true
+                                    )
+                                ) {
+                                    try {
+                                        scanExecutor.shutdownNow()
+                                    } catch (_: Exception) {
+                                    }
+
+                                    error(
+                                        "mDNS و جستجوی مستقیم شبکه نتوانستند CRM را پیدا کنند.\n\n" +
+                                        "لطفاً مطمئن شوید گوشی و لپ‌تاپ به یک Wi-Fi متصل هستند."
+                                    )
+                                }
+                            },
+                            SCAN_TIMEOUT_MS
+                        )
+
+                    for (address in candidates) {
+
+                        if (
+                            finished.get() ||
+                            scanFinished.get()
+                        ) {
+                            break
+                        }
+
+                        scanExecutor.execute {
+
+                            if (
+                                finished.get() ||
+                                scanFinished.get()
+                            ) {
+                                return@execute
+                            }
+
+                            if (
+                                isCrmServer(
+                                    address,
+                                    SERVER_PORT
+                                )
+                            ) {
+
+                                if (
+                                    scanFinished.compareAndSet(
+                                        false,
+                                        true
+                                    )
+                                ) {
+
+                                    handler.removeCallbacks(
+                                        scanTimeout
+                                    )
+
+                                    try {
+                                        scanExecutor.shutdownNow()
+                                    } catch (_: Exception) {
+                                    }
+
+                                    success(
+                                        "http://$address:$SERVER_PORT"
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                } catch (e: Exception) {
+
+                    error(
+                        "خطا در جستجوی سرور در شبکه:\n" +
+                            (e.message ?: "خطای نامشخص")
+                    )
+                }
+            }
+        }
+
+        fun resolveService(
+            serviceInfo: NsdServiceInfo
+        ) {
+
+            try {
+
+                if (
+                    Build.VERSION.SDK_INT >=
+                    Build.VERSION_CODES.TIRAMISU
+                ) {
+
+                    nsdManager.resolveService(
+                        serviceInfo,
+                        executor,
+                        object :
+                            NsdManager.ResolveListener {
+
+                            override fun onServiceResolved(
+                                resolvedInfo: NsdServiceInfo
+                            ) {
+
+                                if (finished.get()) {
+                                    return
+                                }
+
+                                val host =
+                                    resolvedInfo.host
+                                        ?.hostAddress
+
+                                val port =
+                                    resolvedInfo.port
+
+                                if (
+                                    !host.isNullOrBlank() &&
+                                    port > 0
+                                ) {
+                                    success(
+                                        "http://$host:$port"
+                                    )
+                                }
+                            }
+
+                            override fun onResolveFailed(
+                                serviceInfo: NsdServiceInfo,
+                                errorCode: Int
+                            ) {
+                                // Resolve شکست خورد.
+                                // فعلاً discovery را ادامه می‌دهیم.
+                            }
+                        }
+                    )
+
+                } else {
+
+                    @Suppress("DEPRECATION")
+                    nsdManager.resolveService(
+                        serviceInfo,
+                        object :
+                            NsdManager.ResolveListener {
+
+                            override fun onServiceResolved(
+                                resolvedInfo: NsdServiceInfo
+                            ) {
+
+                                if (finished.get()) {
+                                    return
+                                }
+
+                                val host =
+                                    resolvedInfo.host
+                                        ?.hostAddress
+
+                                val port =
+                                    resolvedInfo.port
+
+                                if (
+                                    !host.isNullOrBlank() &&
+                                    port > 0
+                                ) {
+                                    success(
+                                        "http://$host:$port"
+                                    )
+                                }
+                            }
+
+                            override fun onResolveFailed(
+                                serviceInfo: NsdServiceInfo,
+                                errorCode: Int
+                            ) {
+                                // ادامه discovery
+                            }
+                        }
+                    )
+                }
+
+            } catch (_: Exception) {
+                // در صورت شکست Resolve، discovery ادامه پیدا می‌کند.
+            }
+        }
+
+        discoveryListener =
             object :
                 NsdManager.DiscoveryListener {
 
@@ -164,8 +364,15 @@ object ServerDiscovery {
                 ) {
 
                     handler.postDelayed(
-                        timeoutRunnable,
-                        TIMEOUT_MS
+                        {
+                            if (!finished.get()) {
+
+                                cleanupNsd()
+
+                                startNetworkScan()
+                            }
+                        },
+                        MDNS_TIMEOUT_MS
                     )
                 }
 
@@ -173,17 +380,15 @@ object ServerDiscovery {
                     serviceInfo: NsdServiceInfo
                 ) {
 
-                    if (finished) {
+                    if (finished.get()) {
                         return
                     }
 
                     val name =
-                        serviceInfo.serviceName
-                            ?: ""
+                        serviceInfo.serviceName ?: ""
 
                     val type =
-                        serviceInfo.serviceType
-                            ?: ""
+                        serviceInfo.serviceType ?: ""
 
                     if (
                         !type.contains(
@@ -204,46 +409,7 @@ object ServerDiscovery {
                     }
 
                     resolveService(
-                        nsdManager =
-                            nsdManager,
-                        serviceInfo =
-                            serviceInfo,
-                        executor =
-                            executor,
-                        onSuccess =
-                            { host, port ->
-
-                                if (
-                                    host.isNullOrBlank()
-                                ) {
-
-                                    failure(
-                                        "CRM پیدا شد ولی IP آن دریافت نشد."
-                                    )
-
-                                    return@resolveService
-                                }
-
-                                if (port <= 0) {
-
-                                    failure(
-                                        "CRM پیدا شد ولی Port نامعتبر است: $port"
-                                    )
-
-                                    return@resolveService
-                                }
-
-                                success(
-                                    "http://$host:$port"
-                                )
-                            },
-                        onError =
-                            { message ->
-
-                                failure(
-                                    message
-                                )
-                            }
+                        serviceInfo
                     )
                 }
 
@@ -262,10 +428,12 @@ object ServerDiscovery {
                     errorCode: Int
                 ) {
 
-                    failure(
-                        "شروع mDNS شکست خورد.\n" +
-                        "کد خطا: $errorCode"
-                    )
+                    if (!finished.get()) {
+
+                        cleanupNsd()
+
+                        startNetworkScan()
+                    }
                 }
 
                 override fun onStopDiscoveryFailed(
@@ -277,180 +445,247 @@ object ServerDiscovery {
 
         try {
 
-            /*
-             * Android 13 / API 33 به بعد:
-             *
-             * Discovery را روی Network فعال Wi-Fi
-             * انجام می‌دهیم، نه روی همه مسیرهای شبکه.
-             */
             if (
                 Build.VERSION.SDK_INT >=
                 Build.VERSION_CODES.TIRAMISU
             ) {
 
                 val network =
-                    getActiveNetwork(
+                    getWifiNetwork(
                         connectivityManager
                     )
+
+                if (network == null) {
+
+                    startNetworkScan()
+
+                    return
+                }
 
                 nsdManager.discoverServices(
                     SERVICE_TYPE,
                     NsdManager.PROTOCOL_DNS_SD,
                     network,
                     executor,
-                    listener!!
+                    discoveryListener!!
                 )
 
             } else {
 
                 @Suppress("DEPRECATION")
-
                 nsdManager.discoverServices(
                     SERVICE_TYPE,
                     NsdManager.PROTOCOL_DNS_SD,
-                    listener!!
+                    discoveryListener!!
                 )
             }
 
         } catch (e: SecurityException) {
 
-            failure(
-                "Android اجازه دسترسی به شبکه محلی برای mDNS را نداد.\n\n" +
-                (e.message ?: "")
-            )
+            cleanupNsd()
+
+            startNetworkScan()
 
         } catch (e: Exception) {
 
-            failure(
-                "خطا در شروع mDNS:\n" +
-                (e.message ?: "خطای نامشخص")
-            )
+            cleanupNsd()
+
+            startNetworkScan()
         }
     }
 
-    private fun getActiveNetwork(
+    private fun getWifiNetwork(
         connectivityManager: ConnectivityManager
     ): Network? {
 
-        return try {
+        try {
 
-            connectivityManager.activeNetwork
+            val activeNetwork =
+                connectivityManager.activeNetwork
+
+            if (activeNetwork != null) {
+
+                val capabilities =
+                    connectivityManager.getNetworkCapabilities(
+                        activeNetwork
+                    )
+
+                if (
+                    capabilities?.hasTransport(
+                        NetworkCapabilities.TRANSPORT_WIFI
+                    ) == true
+                ) {
+                    return activeNetwork
+                }
+            }
+
+            for (
+                network in connectivityManager.allNetworks
+            ) {
+
+                val capabilities =
+                    connectivityManager.getNetworkCapabilities(
+                        network
+                    )
+
+                if (
+                    capabilities?.hasTransport(
+                        NetworkCapabilities.TRANSPORT_WIFI
+                    ) == true
+                ) {
+                    return network
+                }
+            }
 
         } catch (_: Exception) {
-
-            null
         }
+
+        return null
     }
 
-    private fun resolveService(
-        nsdManager: NsdManager,
-        serviceInfo: NsdServiceInfo,
-        executor: java.util.concurrent.Executor,
-        onSuccess: (String?, Int) -> Unit,
-        onError: (String) -> Unit
-    ) {
+    private fun buildCandidateAddresses(
+        linkProperties: LinkProperties?
+    ): List<String> {
+
+        if (linkProperties == null) {
+            return emptyList()
+        }
+
+        val result =
+            mutableListOf<String>()
+
+        for (
+            linkAddress in linkProperties.linkAddresses
+        ) {
+
+            val address =
+                linkAddress.address
+
+            if (address !is Inet4Address) {
+                continue
+            }
+
+            val prefix =
+                linkAddress.prefixLength
+
+            if (prefix < 16 || prefix > 30) {
+                continue
+            }
+
+            val bytes =
+                address.address
+
+            val ip =
+                ((bytes[0].toInt() and 0xFF) shl 24) or
+                    ((bytes[1].toInt() and 0xFF) shl 16) or
+                    ((bytes[2].toInt() and 0xFF) shl 8) or
+                    (bytes[3].toInt() and 0xFF)
+
+            val mask =
+                (-1 shl (32 - prefix))
+
+            val network =
+                ip and mask
+
+            val hostCount =
+                1L shl (32 - prefix)
+
+            // برای جلوگیری از اسکن شبکه‌های بسیار بزرگ،
+            // حداکثر 1024 آدرس را بررسی می‌کنیم.
+            val maxHosts =
+                minOf(
+                    hostCount - 2,
+                    1024L
+                )
+
+            for (i in 1..maxHosts) {
+
+                val candidate =
+                    network + i
+
+                val a =
+                    (candidate shr 24) and 0xFF
+
+                val b =
+                    (candidate shr 16) and 0xFF
+
+                val c =
+                    (candidate shr 8) and 0xFF
+
+                val d =
+                    candidate and 0xFF
+
+                result.add(
+                    "$a.$b.$c.$d"
+                )
+            }
+        }
+
+        return result.distinct()
+    }
+
+    private fun isCrmServer(
+        host: String,
+        port: Int
+    ): Boolean {
+
+        var socket: Socket? = null
+        var connection: HttpURLConnection? = null
 
         try {
 
-            if (
-                Build.VERSION.SDK_INT >=
-                Build.VERSION_CODES.TIRAMISU
-            ) {
+            socket =
+                Socket()
 
-                nsdManager.resolveService(
-                    serviceInfo,
-                    executor,
-                    object :
-                        NsdManager.ResolveListener {
+            socket.connect(
+                java.net.InetSocketAddress(
+                    host,
+                    port
+                ),
+                700
+            )
 
-                        override fun onServiceResolved(
-                            resolvedInfo:
-                                NsdServiceInfo
-                        ) {
+            socket.close()
+            socket = null
 
-                            val host =
-                                resolvedInfo.host
-                                    ?.hostAddress
-
-                            val port =
-                                resolvedInfo.port
-
-                            onSuccess(
-                                host,
-                                port
-                            )
-                        }
-
-                        override fun onResolveFailed(
-                            serviceInfo:
-                                NsdServiceInfo,
-                            errorCode: Int
-                        ) {
-
-                            onError(
-                                "CRM توسط mDNS پیدا شد، " +
-                                "اما Resolve شکست خورد.\n" +
-                                "کد خطا: $errorCode"
-                            )
-                        }
-                    }
+            val url =
+                URL(
+                    "http://$host:$port/"
                 )
 
-            } else {
+            connection =
+                url.openConnection()
+                    as HttpURLConnection
 
-                @Suppress("DEPRECATION")
+            connection.connectTimeout = 1200
+            connection.readTimeout = 1200
+            connection.requestMethod = "GET"
 
-                nsdManager.resolveService(
-                    serviceInfo,
-                    object :
-                        NsdManager.ResolveListener {
+            connection.setRequestProperty(
+                "Connection",
+                "close"
+            )
 
-                        override fun onServiceResolved(
-                            resolvedInfo:
-                                NsdServiceInfo
-                        ) {
+            val responseCode =
+                connection.responseCode
 
-                            val host =
-                                resolvedInfo.host
-                                    ?.hostAddress
+            return responseCode in 100..599
 
-                            val port =
-                                resolvedInfo.port
+        } catch (_: Exception) {
 
-                            onSuccess(
-                                host,
-                                port
-                            )
-                        }
+            return false
 
-                        override fun onResolveFailed(
-                            serviceInfo:
-                                NsdServiceInfo,
-                            errorCode: Int
-                        ) {
+        } finally {
 
-                            onError(
-                                "Resolve سرویس CRM شکست خورد.\n" +
-                                "کد خطا: $errorCode"
-                            )
-                        }
-                    }
-                )
+            try {
+                socket?.close()
+            } catch (_: Exception) {
             }
 
-        } catch (e: SecurityException) {
-
-            onError(
-                "Android اجازه Resolve سرویس mDNS را نداد.\n" +
-                (e.message ?: "")
-            )
-
-        } catch (e: Exception) {
-
-            onError(
-                "خطا در Resolve سرویس CRM:\n" +
-                (e.message ?: "خطای نامشخص")
-            )
+            try {
+                connection?.disconnect()
+            } catch (_: Exception) {
+            }
         }
     }
 }
