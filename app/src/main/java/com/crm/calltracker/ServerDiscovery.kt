@@ -3,13 +3,15 @@ package com.crm.calltracker
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.net.ConnectivityManager
+import android.net.Network
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
-import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import androidx.core.content.ContextCompat
+import java.util.concurrent.Executors
 
 object ServerDiscovery {
 
@@ -17,12 +19,19 @@ object ServerDiscovery {
     private const val TIMEOUT_MS = 15000L
 
     fun hasNearbyWifiPermission(context: Context): Boolean {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+
+        return if (
+            Build.VERSION.SDK_INT >=
+            Build.VERSION_CODES.TIRAMISU
+        ) {
+
             ContextCompat.checkSelfPermission(
                 context,
                 Manifest.permission.NEARBY_WIFI_DEVICES
             ) == PackageManager.PERMISSION_GRANTED
+
         } else {
+
             true
         }
     }
@@ -32,104 +41,108 @@ object ServerDiscovery {
         onFound: (String) -> Unit,
         onError: (String) -> Unit
     ) {
+
         if (!hasNearbyWifiPermission(context)) {
+
             onError(
                 "مجوز «دستگاه‌های نزدیک» برای mDNS داده نشده است."
             )
+
             return
         }
 
-        val appContext = context.applicationContext
+        val appContext =
+            context.applicationContext
 
         val nsdManager =
             appContext.getSystemService(
                 Context.NSD_SERVICE
             ) as NsdManager
 
-        val wifiManager =
+        val connectivityManager =
             appContext.getSystemService(
-                Context.WIFI_SERVICE
-            ) as WifiManager
+                Context.CONNECTIVITY_SERVICE
+            ) as ConnectivityManager
 
         val handler =
-            Handler(Looper.getMainLooper())
+            Handler(
+                Looper.getMainLooper()
+            )
+
+        val executor =
+            Executors.newSingleThreadExecutor()
 
         var finished = false
-        var listener: NsdManager.DiscoveryListener? = null
-        var multicastLock: WifiManager.MulticastLock? = null
+
+        var listener:
+            NsdManager.DiscoveryListener? = null
 
         fun cleanup() {
 
             try {
+
                 listener?.let {
-                    nsdManager.stopServiceDiscovery(it)
+
+                    nsdManager.stopServiceDiscovery(
+                        it
+                    )
                 }
+
             } catch (_: Exception) {
             }
 
             listener = null
 
             try {
-                multicastLock?.let {
-                    if (it.isHeld) {
-                        it.release()
-                    }
-                }
+                executor.shutdownNow()
             } catch (_: Exception) {
             }
-
-            multicastLock = null
         }
 
-        fun success(url: String) {
+        fun success(
+            url: String
+        ) {
 
-            if (finished) return
+            if (finished) {
+                return
+            }
 
             finished = true
 
             cleanup()
 
-            ApiConfig.SERVER_URL =
+            val finalUrl =
                 url.trimEnd('/')
 
+            ApiConfig.SERVER_URL =
+                finalUrl
+
             handler.post {
-                onFound(url.trimEnd('/'))
+
+                onFound(
+                    finalUrl
+                )
             }
         }
 
-        fun failure(message: String) {
+        fun failure(
+            message: String
+        ) {
 
-            if (finished) return
+            if (finished) {
+                return
+            }
 
             finished = true
 
             cleanup()
 
             handler.post {
-                onError(message)
-            }
-        }
 
-        try {
-
-            multicastLock =
-                wifiManager.createMulticastLock(
-                    "CRM_CallTracker_mDNS"
+                onError(
+                    message
                 )
-
-            multicastLock?.setReferenceCounted(false)
-
-            if (multicastLock?.isHeld != true) {
-                multicastLock?.acquire()
             }
-
-        } catch (e: Exception) {
-
-            failure(
-                "فعال‌سازی MulticastLock ناموفق بود:\n${e.message}"
-            )
-
-            return
         }
 
         val timeoutRunnable =
@@ -137,12 +150,14 @@ object ServerDiscovery {
 
                 failure(
                     "Android در مدت ۱۵ ثانیه هیچ سرویس " +
-                    "_crm._tcp پیدا نکرد."
+                    "_crm._tcp پیدا نکرد.\n\n" +
+                    "بررسی شد: Wi-Fi و مجوز دستگاه‌های نزدیک."
                 )
             }
 
         listener =
-            object : NsdManager.DiscoveryListener {
+            object :
+                NsdManager.DiscoveryListener {
 
                 override fun onDiscoveryStarted(
                     serviceType: String
@@ -158,15 +173,20 @@ object ServerDiscovery {
                     serviceInfo: NsdServiceInfo
                 ) {
 
-                    if (finished) return
+                    if (finished) {
+                        return
+                    }
 
                     val name =
-                        serviceInfo.serviceName ?: ""
+                        serviceInfo.serviceName
+                            ?: ""
 
                     val type =
-                        serviceInfo.serviceType ?: ""
+                        serviceInfo.serviceType
+                            ?: ""
 
-                    if (!type.contains(
+                    if (
+                        !type.contains(
                             "_crm._tcp",
                             ignoreCase = true
                         )
@@ -174,7 +194,8 @@ object ServerDiscovery {
                         return
                     }
 
-                    if (!name.contains(
+                    if (
+                        !name.contains(
                             "CRM-Server",
                             ignoreCase = true
                         )
@@ -182,133 +203,48 @@ object ServerDiscovery {
                         return
                     }
 
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    resolveService(
+                        nsdManager =
+                            nsdManager,
+                        serviceInfo =
+                            serviceInfo,
+                        executor =
+                            executor,
+                        onSuccess =
+                            { host, port ->
 
-                        try {
+                                if (
+                                    host.isNullOrBlank()
+                                ) {
 
-                            nsdManager.resolveService(
-                                serviceInfo,
-                                object :
-                                    NsdManager.ResolveListener {
+                                    failure(
+                                        "CRM پیدا شد ولی IP آن دریافت نشد."
+                                    )
 
-                                    override fun onServiceResolved(
-                                        resolvedInfo: NsdServiceInfo
-                                    ) {
-
-                                        if (finished) return
-
-                                        val host =
-                                            resolvedInfo.host
-                                                ?.hostAddress
-
-                                        val port =
-                                            resolvedInfo.port
-
-                                        if (
-                                            host.isNullOrBlank()
-                                        ) {
-
-                                            failure(
-                                                "CRM پیدا شد ولی IP آن دریافت نشد."
-                                            )
-
-                                            return
-                                        }
-
-                                        if (port <= 0) {
-
-                                            failure(
-                                                "CRM پیدا شد ولی Port نامعتبر است: $port"
-                                            )
-
-                                            return
-                                        }
-
-                                        success(
-                                            "http://$host:$port"
-                                        )
-                                    }
-
-                                    override fun onResolveFailed(
-                                        serviceInfo: NsdServiceInfo,
-                                        errorCode: Int
-                                    ) {
-
-                                        failure(
-                                            "CRM توسط mDNS پیدا شد، " +
-                                            "اما Resolve شکست خورد.\n" +
-                                            "کد خطا: $errorCode"
-                                        )
-                                    }
+                                    return@resolveService
                                 }
-                            )
 
-                        } catch (e: Exception) {
+                                if (port <= 0) {
 
-                            failure(
-                                "خطا در Resolve سرویس CRM:\n${e.message}"
-                            )
-                        }
+                                    failure(
+                                        "CRM پیدا شد ولی Port نامعتبر است: $port"
+                                    )
 
-                    } else {
-
-                        try {
-
-                            @Suppress("DEPRECATION")
-                            nsdManager.resolveService(
-                                serviceInfo,
-                                object :
-                                    NsdManager.ResolveListener {
-
-                                    override fun onServiceResolved(
-                                        resolvedInfo: NsdServiceInfo
-                                    ) {
-
-                                        if (finished) return
-
-                                        val host =
-                                            resolvedInfo.host
-                                                ?.hostAddress
-
-                                        val port =
-                                            resolvedInfo.port
-
-                                        if (
-                                            host.isNullOrBlank()
-                                        ) {
-
-                                            failure(
-                                                "CRM پیدا شد ولی IP آن دریافت نشد."
-                                            )
-
-                                            return
-                                        }
-
-                                        success(
-                                            "http://$host:$port"
-                                        )
-                                    }
-
-                                    override fun onResolveFailed(
-                                        serviceInfo: NsdServiceInfo,
-                                        errorCode: Int
-                                    ) {
-
-                                        failure(
-                                            "Resolve سرویس CRM شکست خورد.\n" +
-                                            "کد خطا: $errorCode"
-                                        )
-                                    }
+                                    return@resolveService
                                 }
-                            )
 
-                        } catch (e: Exception) {
+                                success(
+                                    "http://$host:$port"
+                                )
+                            },
+                        onError =
+                            { message ->
 
-                            failure(
-                                "خطا در Resolve سرویس CRM:\n${e.message}"
-                            )
-                        }
-                    }
+                                failure(
+                                    message
+                                )
+                            }
+                    )
                 }
 
                 override fun onServiceLost(
@@ -341,24 +277,179 @@ object ServerDiscovery {
 
         try {
 
-            nsdManager.discoverServices(
-                SERVICE_TYPE,
-                NsdManager.PROTOCOL_DNS_SD,
-                listener!!
-            )
+            /*
+             * Android 13 / API 33 به بعد:
+             *
+             * Discovery را روی Network فعال Wi-Fi
+             * انجام می‌دهیم، نه روی همه مسیرهای شبکه.
+             */
+            if (
+                Build.VERSION.SDK_INT >=
+                Build.VERSION_CODES.TIRAMISU
+            ) {
+
+                val network =
+                    getActiveNetwork(
+                        connectivityManager
+                    )
+
+                nsdManager.discoverServices(
+                    SERVICE_TYPE,
+                    NsdManager.PROTOCOL_DNS_SD,
+                    network,
+                    executor,
+                    listener!!
+                )
+
+            } else {
+
+                @Suppress("DEPRECATION")
+
+                nsdManager.discoverServices(
+                    SERVICE_TYPE,
+                    NsdManager.PROTOCOL_DNS_SD,
+                    listener!!
+                )
+            }
 
         } catch (e: SecurityException) {
 
             failure(
-                "Android اجازه mDNS نداد.\n" +
-                "لطفاً مجوز «دستگاه‌های نزدیک» را فعال کنید.\n\n" +
-                e.message
+                "Android اجازه دسترسی به شبکه محلی برای mDNS را نداد.\n\n" +
+                (e.message ?: "")
             )
 
         } catch (e: Exception) {
 
             failure(
-                "خطا در شروع mDNS:\n${e.message}"
+                "خطا در شروع mDNS:\n" +
+                (e.message ?: "خطای نامشخص")
+            )
+        }
+    }
+
+    private fun getActiveNetwork(
+        connectivityManager: ConnectivityManager
+    ): Network? {
+
+        return try {
+
+            connectivityManager.activeNetwork
+
+        } catch (_: Exception) {
+
+            null
+        }
+    }
+
+    private fun resolveService(
+        nsdManager: NsdManager,
+        serviceInfo: NsdServiceInfo,
+        executor: java.util.concurrent.Executor,
+        onSuccess: (String?, Int) -> Unit,
+        onError: (String) -> Unit
+    ) {
+
+        try {
+
+            if (
+                Build.VERSION.SDK_INT >=
+                Build.VERSION_CODES.TIRAMISU
+            ) {
+
+                nsdManager.resolveService(
+                    serviceInfo,
+                    executor,
+                    object :
+                        NsdManager.ResolveListener {
+
+                        override fun onServiceResolved(
+                            resolvedInfo:
+                                NsdServiceInfo
+                        ) {
+
+                            val host =
+                                resolvedInfo.host
+                                    ?.hostAddress
+
+                            val port =
+                                resolvedInfo.port
+
+                            onSuccess(
+                                host,
+                                port
+                            )
+                        }
+
+                        override fun onResolveFailed(
+                            serviceInfo:
+                                NsdServiceInfo,
+                            errorCode: Int
+                        ) {
+
+                            onError(
+                                "CRM توسط mDNS پیدا شد، " +
+                                "اما Resolve شکست خورد.\n" +
+                                "کد خطا: $errorCode"
+                            )
+                        }
+                    }
+                )
+
+            } else {
+
+                @Suppress("DEPRECATION")
+
+                nsdManager.resolveService(
+                    serviceInfo,
+                    object :
+                        NsdManager.ResolveListener {
+
+                        override fun onServiceResolved(
+                            resolvedInfo:
+                                NsdServiceInfo
+                        ) {
+
+                            val host =
+                                resolvedInfo.host
+                                    ?.hostAddress
+
+                            val port =
+                                resolvedInfo.port
+
+                            onSuccess(
+                                host,
+                                port
+                            )
+                        }
+
+                        override fun onResolveFailed(
+                            serviceInfo:
+                                NsdServiceInfo,
+                            errorCode: Int
+                        ) {
+
+                            onError(
+                                "Resolve سرویس CRM شکست خورد.\n" +
+                                "کد خطا: $errorCode"
+                            )
+                        }
+                    }
+                )
+            }
+
+        } catch (e: SecurityException) {
+
+            onError(
+                "Android اجازه Resolve سرویس mDNS را نداد.\n" +
+                (e.message ?: "")
+            )
+
+        } catch (e: Exception) {
+
+            onError(
+                "خطا در Resolve سرویس CRM:\n" +
+                (e.message ?: "خطای نامشخص")
             )
         }
     }
