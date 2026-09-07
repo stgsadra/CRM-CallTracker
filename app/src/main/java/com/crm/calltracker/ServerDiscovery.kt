@@ -4,7 +4,6 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.net.ConnectivityManager
-import android.net.LinkAddress
 import android.net.LinkProperties
 import android.net.Network
 import android.net.NetworkCapabilities
@@ -14,12 +13,9 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import androidx.core.content.ContextCompat
-import java.io.BufferedReader
-import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.Inet4Address
-import java.net.InetAddress
-import java.net.NetworkInterface
+import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.URL
 import java.util.concurrent.Executors
@@ -118,7 +114,7 @@ object ServerDiscovery {
             }
         }
 
-        fun error(message: String) {
+        fun reportError(message: String) {
             if (!finished.compareAndSet(false, true)) {
                 return
             }
@@ -138,13 +134,18 @@ object ServerDiscovery {
 
             thread {
 
+                var scanExecutor:
+                    java.util.concurrent.ExecutorService? = null
+
                 try {
 
                     val network =
-                        getWifiNetwork(connectivityManager)
+                        getWifiNetwork(
+                            connectivityManager
+                        )
 
                     if (network == null) {
-                        error(
+                        reportError(
                             "شبکه Wi-Fi فعال پیدا نشد."
                         )
                         return@thread
@@ -161,40 +162,42 @@ object ServerDiscovery {
                         )
 
                     if (candidates.isEmpty()) {
-                        error(
+                        reportError(
                             "آدرس‌های شبکه Wi-Fi برای جستجوی سرور پیدا نشد."
                         )
                         return@thread
                     }
 
-                    val scanExecutor =
+                    scanExecutor =
                         Executors.newFixedThreadPool(32)
 
                     val scanFinished =
                         AtomicBoolean(false)
 
-                    val scanTimeout =
-                        handler.postDelayed(
-                            {
-                                if (
-                                    scanFinished.compareAndSet(
-                                        false,
-                                        true
-                                    )
-                                ) {
-                                    try {
-                                        scanExecutor.shutdownNow()
-                                    } catch (_: Exception) {
-                                    }
-
-                                    error(
-                                        "mDNS و جستجوی مستقیم شبکه نتوانستند CRM را پیدا کنند.\n\n" +
-                                        "لطفاً مطمئن شوید گوشی و لپ‌تاپ به یک Wi-Fi متصل هستند."
-                                    )
+                    val scanTimeoutRunnable =
+                        Runnable {
+                            if (
+                                scanFinished.compareAndSet(
+                                    false,
+                                    true
+                                )
+                            ) {
+                                try {
+                                    scanExecutor?.shutdownNow()
+                                } catch (_: Exception) {
                                 }
-                            },
-                            SCAN_TIMEOUT_MS
-                        )
+
+                                reportError(
+                                    "mDNS و جستجوی مستقیم شبکه نتوانستند CRM را پیدا کنند.\n\n" +
+                                        "لطفاً مطمئن شوید گوشی و لپ‌تاپ به یک Wi-Fi متصل هستند."
+                                )
+                            }
+                        }
+
+                    handler.postDelayed(
+                        scanTimeoutRunnable,
+                        SCAN_TIMEOUT_MS
+                    )
 
                     for (address in candidates) {
 
@@ -205,7 +208,11 @@ object ServerDiscovery {
                             break
                         }
 
-                        scanExecutor.execute {
+                        val currentExecutor =
+                            scanExecutor
+                                ?: break
+
+                        currentExecutor.execute {
 
                             if (
                                 finished.get() ||
@@ -229,11 +236,11 @@ object ServerDiscovery {
                                 ) {
 
                                     handler.removeCallbacks(
-                                        scanTimeout
+                                        scanTimeoutRunnable
                                     )
 
                                     try {
-                                        scanExecutor.shutdownNow()
+                                        currentExecutor.shutdownNow()
                                     } catch (_: Exception) {
                                     }
 
@@ -247,10 +254,18 @@ object ServerDiscovery {
 
                 } catch (e: Exception) {
 
-                    error(
+                    reportError(
                         "خطا در جستجوی سرور در شبکه:\n" +
-                            (e.message ?: "خطای نامشخص")
+                            (e.message
+                                ?: "خطای نامشخص")
                     )
+
+                } finally {
+
+                    try {
+                        scanExecutor?.shutdown()
+                    } catch (_: Exception) {
+                    }
                 }
             }
         }
@@ -301,8 +316,8 @@ object ServerDiscovery {
                                 serviceInfo: NsdServiceInfo,
                                 errorCode: Int
                             ) {
-                                // Resolve شکست خورد.
-                                // فعلاً discovery را ادامه می‌دهیم.
+                                // اگر Resolve شکست خورد،
+                                // Discovery ادامه پیدا می‌کند.
                             }
                         }
                     )
@@ -344,14 +359,16 @@ object ServerDiscovery {
                                 serviceInfo: NsdServiceInfo,
                                 errorCode: Int
                             ) {
-                                // ادامه discovery
+                                // اگر Resolve شکست خورد،
+                                // Discovery ادامه پیدا می‌کند.
                             }
                         }
                     )
                 }
 
             } catch (_: Exception) {
-                // در صورت شکست Resolve، discovery ادامه پیدا می‌کند.
+                // در صورت شکست Resolve،
+                // Discovery ادامه پیدا می‌کند.
             }
         }
 
@@ -582,16 +599,14 @@ object ServerDiscovery {
                     (bytes[3].toInt() and 0xFF)
 
             val mask =
-                (-1 shl (32 - prefix))
+                -1 shl (32 - prefix)
 
-            val network =
+            val networkAddress =
                 ip and mask
 
             val hostCount =
                 1L shl (32 - prefix)
 
-            // برای جلوگیری از اسکن شبکه‌های بسیار بزرگ،
-            // حداکثر 1024 آدرس را بررسی می‌کنیم.
             val maxHosts =
                 minOf(
                     hostCount - 2,
@@ -601,7 +616,7 @@ object ServerDiscovery {
             for (i in 1..maxHosts) {
 
                 val candidate =
-                    network + i
+                    networkAddress + i
 
                 val a =
                     (candidate shr 24) and 0xFF
@@ -638,7 +653,7 @@ object ServerDiscovery {
                 Socket()
 
             socket.connect(
-                java.net.InetSocketAddress(
+                InetSocketAddress(
                     host,
                     port
                 ),
