@@ -184,18 +184,18 @@ class MainActivity : ComponentActivity() {
                     )
 
                     loginStatusText.text =
-                        "سرور CRM پیدا شد"
+                        "سرور CRM پیدا شد:\n${ApiConfig.SERVER_URL}"
 
                     loginButton.isEnabled = true
                 }
             },
 
-            onError = {
+            onError = { message ->
 
                 runOnUiThread {
 
                     loginStatusText.text =
-                        "سرور CRM پیدا نشد؛ آدرس را دستی وارد کنید"
+                        "خطای mDNS:\n$message"
 
                     loginButton.isEnabled = true
                 }
