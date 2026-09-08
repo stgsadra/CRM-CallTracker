@@ -280,7 +280,7 @@ object ServerDiscovery {
                         false,
                         true
                     )
-                {
+                ) {
 
                     ApiConfig.SERVER_URL =
                         serverUrl
