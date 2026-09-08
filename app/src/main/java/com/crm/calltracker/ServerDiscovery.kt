@@ -33,7 +33,8 @@ object ServerDiscovery {
         onError: (String) -> Unit
     ) {
 
-        val appContext = context.applicationContext
+        val appContext =
+            context.applicationContext
 
         thread {
 
@@ -48,10 +49,12 @@ object ServerDiscovery {
                     connectivityManager.activeNetwork
 
                 if (network == null) {
+
                     showResult(
                         onError,
                         "هیچ شبکه فعالی در گوشی پیدا نشد."
                     )
+
                     return@thread
                 }
 
@@ -61,10 +64,12 @@ object ServerDiscovery {
                     )
 
                 if (capabilities == null) {
+
                     showResult(
                         onError,
                         "اطلاعات شبکه فعال گوشی دریافت نشد."
                     )
+
                     return@thread
                 }
 
@@ -74,10 +79,12 @@ object ServerDiscovery {
                     )
 
                 if (!isWifi) {
+
                     showResult(
                         onError,
                         "گوشی به Wi-Fi متصل نیست."
                     )
+
                     return@thread
                 }
 
@@ -87,38 +94,61 @@ object ServerDiscovery {
                     )
 
                 if (linkProperties == null) {
+
                     showResult(
                         onError,
                         "اطلاعات IP شبکه Wi-Fi دریافت نشد."
                     )
+
                     return@thread
                 }
 
                 val ipv4Address =
-                    findIpv4Address(linkProperties)
+                    findIpv4Address(
+                        linkProperties
+                    )
 
                 if (ipv4Address == null) {
+
                     showResult(
                         onError,
                         "IP نسخه 4 گوشی پیدا نشد."
                     )
+
                     return@thread
                 }
 
+                val address =
+                    ipv4Address.address
+
                 val ip =
-                    ipv4Address.hostAddress
-                        ?: ""
+                    address.getHostAddress()
+
+                if (ip == null || ip.isEmpty()) {
+
+                    showResult(
+                        onError,
+                        "IP گوشی قابل تشخیص نیست."
+                    )
+
+                    return@thread
+                }
 
                 val prefixLength =
                     ipv4Address.prefixLength
 
-                if (prefixLength < 16 || prefixLength > 30) {
+                if (
+                    prefixLength < 16 ||
+                    prefixLength > 30
+                ) {
+
                     showResult(
                         onError,
                         "Subnet شبکه پشتیبانی نمی‌شود.\n\n" +
                             "IP گوشی: $ip\n" +
                             "Prefix: $prefixLength"
                     )
+
                     return@thread
                 }
 
@@ -126,34 +156,46 @@ object ServerDiscovery {
                     ip.split(".")
 
                 if (ipParts.size != 4) {
+
                     showResult(
                         onError,
                         "IP گوشی معتبر نیست:\n$ip"
                     )
+
                     return@thread
                 }
 
                 val first =
-                    ipParts[0].toInt()
+                    ipParts[0].toIntOrNull()
 
                 val second =
-                    ipParts[1].toInt()
+                    ipParts[1].toIntOrNull()
 
                 val third =
-                    ipParts[2].toInt()
+                    ipParts[2].toIntOrNull()
+
+                if (
+                    first == null ||
+                    second == null ||
+                    third == null
+                ) {
+
+                    showResult(
+                        onError,
+                        "ساختار IP گوشی معتبر نیست:\n$ip"
+                    )
+
+                    return@thread
+                }
 
                 val subnetPrefix =
                     "$first.$second.$third"
 
-                val firstHost = 1
-                val lastHost = 254
-
                 scanNetwork(
-                    context = appContext,
                     network = network,
                     subnetPrefix = subnetPrefix,
-                    firstHost = firstHost,
-                    lastHost = lastHost,
+                    firstHost = 1,
+                    lastHost = 254,
                     onFound = onFound,
                     onError = onError
                 )
@@ -176,7 +218,10 @@ object ServerDiscovery {
         linkProperties: LinkProperties
     ): android.net.LinkAddress? {
 
-        for (linkAddress in linkProperties.linkAddresses) {
+        for (
+            linkAddress
+            in linkProperties.linkAddresses
+        ) {
 
             val address =
                 linkAddress.address
@@ -186,6 +231,7 @@ object ServerDiscovery {
                 !address.isLoopbackAddress &&
                 !address.isLinkLocalAddress
             ) {
+
                 return linkAddress
             }
         }
@@ -194,7 +240,6 @@ object ServerDiscovery {
     }
 
     private fun scanNetwork(
-        context: Context,
         network: Network,
         subnetPrefix: String,
         firstHost: Int,
@@ -209,7 +254,10 @@ object ServerDiscovery {
         val executor =
             Executors.newFixedThreadPool(24)
 
-        for (host in firstHost..lastHost) {
+        for (
+            host
+            in firstHost..lastHost
+        ) {
 
             executor.execute {
 
@@ -220,30 +268,29 @@ object ServerDiscovery {
                 val serverUrl =
                     "http://$subnetPrefix.$host:$CRM_PORT"
 
-                if (
+                val isServer =
                     isCrmServer(
                         network,
                         serverUrl
                     )
-                ) {
 
-                    if (
-                        found.compareAndSet(
-                            false,
-                            true
-                        )
-                    {
+                if (
+                    isServer &&
+                    found.compareAndSet(
+                        false,
+                        true
+                    )
+                {
 
-                        ApiConfig.SERVER_URL =
-                            serverUrl
+                    ApiConfig.SERVER_URL =
+                        serverUrl
 
-                        executor.shutdownNow()
+                    executor.shutdownNow()
 
-                        showResult(
-                            onFound,
-                            serverUrl
-                        )
-                    }
+                    showResult(
+                        onFound,
+                        serverUrl
+                    )
                 }
             }
         }
@@ -254,7 +301,8 @@ object ServerDiscovery {
 
                 executor.shutdown()
 
-                var waited = 0
+                var waited =
+                    0
 
                 while (
                     !executor.isTerminated &&
