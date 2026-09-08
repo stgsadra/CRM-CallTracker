@@ -2,7 +2,6 @@ package com.crm.calltracker
 
 import android.content.Context
 import android.net.ConnectivityManager
-import android.net.LinkAddress
 import android.net.LinkProperties
 import android.net.Network
 import android.net.NetworkCapabilities
@@ -10,7 +9,6 @@ import android.os.Handler
 import android.os.Looper
 import java.net.HttpURLConnection
 import java.net.Inet4Address
-import java.net.InetAddress
 import java.net.URL
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
@@ -22,8 +20,6 @@ object ServerDiscovery {
 
     private const val CONNECT_TIMEOUT = 700
     private const val READ_TIMEOUT = 700
-
-    private const val MAX_HOSTS = 254
 
     fun hasNearbyWifiPermission(
         context: Context
@@ -52,26 +48,23 @@ object ServerDiscovery {
                     connectivityManager.activeNetwork
 
                 if (network == null) {
-
                     showResult(
                         onError,
                         "هیچ شبکه فعالی در گوشی پیدا نشد."
                     )
-
                     return@thread
                 }
 
                 val capabilities =
-                    connectivityManager
-                        .getNetworkCapabilities(network)
+                    connectivityManager.getNetworkCapabilities(
+                        network
+                    )
 
                 if (capabilities == null) {
-
                     showResult(
                         onError,
                         "اطلاعات شبکه فعال گوشی دریافت نشد."
                     )
-
                     return@thread
                 }
 
@@ -81,99 +74,84 @@ object ServerDiscovery {
                     )
 
                 if (!isWifi) {
-
                     showResult(
                         onError,
                         "گوشی به Wi-Fi متصل نیست."
                     )
-
                     return@thread
                 }
 
                 val linkProperties =
-                    connectivityManager
-                        .getLinkProperties(network)
+                    connectivityManager.getLinkProperties(
+                        network
+                    )
 
                 if (linkProperties == null) {
-
                     showResult(
                         onError,
                         "اطلاعات IP شبکه Wi-Fi دریافت نشد."
                     )
-
                     return@thread
                 }
 
-                val ipv4 =
-                    findIpv4Address(
-                        linkProperties
-                    )
+                val ipv4Address =
+                    findIpv4Address(linkProperties)
 
-                if (ipv4 == null) {
-
+                if (ipv4Address == null) {
                     showResult(
                         onError,
                         "IP نسخه 4 گوشی پیدا نشد."
                     )
-
                     return@thread
                 }
 
-                val prefixLength =
-                    ipv4.networkPrefixLength
+                val ip =
+                    ipv4Address.hostAddress
+                        ?: ""
 
-                val localAddress =
-                    ipv4.address
+                val prefixLength =
+                    ipv4Address.prefixLength
 
                 if (prefixLength < 16 || prefixLength > 30) {
-
                     showResult(
                         onError,
                         "Subnet شبکه پشتیبانی نمی‌شود.\n\n" +
-                            "IP گوشی: ${localAddress.hostAddress}\n" +
+                            "IP گوشی: $ip\n" +
                             "Prefix: $prefixLength"
                     )
-
                     return@thread
                 }
 
-                val subnetInfo =
-                    calculateSubnet(
-                        localAddress,
-                        prefixLength
-                    )
+                val ipParts =
+                    ip.split(".")
 
-                if (subnetInfo == null) {
-
+                if (ipParts.size != 4) {
                     showResult(
                         onError,
-                        "محاسبه Subnet شبکه انجام نشد."
+                        "IP گوشی معتبر نیست:\n$ip"
                     )
-
                     return@thread
                 }
 
-                val networkPrefix =
-                    subnetInfo.networkPrefix
+                val first =
+                    ipParts[0].toInt()
 
-                val firstHost =
-                    subnetInfo.firstHost
+                val second =
+                    ipParts[1].toInt()
 
-                val lastHost =
-                    subnetInfo.lastHost
+                val third =
+                    ipParts[2].toInt()
 
-                showResult(
-                    null,
-                    null,
-                    "شروع جستجوی CRM...\n" +
-                        "IP گوشی: ${localAddress.hostAddress}\n" +
-                        "Prefix: $prefixLength\n" +
-                        "Subnet: $networkPrefix.0/24"
-                )
+                val subnetPrefix =
+                    "$first.$second.$third"
+
+                val firstHost = 1
+                val lastHost = 254
 
                 scanNetwork(
                     context = appContext,
                     network = network,
+                    subnetPrefix = subnetPrefix,
                     firstHost = firstHost,
                     lastHost = lastHost,
                     onFound = onFound,
@@ -196,7 +174,7 @@ object ServerDiscovery {
 
     private fun findIpv4Address(
         linkProperties: LinkProperties
-    ): LinkAddress? {
+    ): android.net.LinkAddress? {
 
         for (linkAddress in linkProperties.linkAddresses) {
 
@@ -215,80 +193,10 @@ object ServerDiscovery {
         return null
     }
 
-    private data class SubnetInfo(
-        val networkPrefix: String,
-        val firstHost: Int,
-        val lastHost: Int
-    )
-
-    private fun calculateSubnet(
-        address: InetAddress,
-        prefixLength: Int
-    ): SubnetInfo? {
-
-        val ipv4 =
-            address as? Inet4Address
-                ?: return null
-
-        val bytes =
-            ipv4.address
-
-        val ip =
-            (
-                (bytes[0].toInt() and 0xff) shl 24
-                ) or
-                (
-                    (bytes[1].toInt() and 0xff) shl 16
-                    ) or
-                (
-                    (bytes[2].toInt() and 0xff) shl 8
-                    ) or
-                (
-                    bytes[3].toInt() and 0xff
-                    )
-
-        val mask =
-            if (prefixLength == 32) {
-                -1
-            } else {
-                (-1 shl (32 - prefixLength))
-            }
-
-        val networkAddress =
-            ip and mask
-
-        val broadcastAddress =
-            networkAddress or mask.inv()
-
-        val firstHost =
-            networkAddress + 1
-
-        val lastHost =
-            broadcastAddress - 1
-
-        if (
-            firstHost >= lastHost
-        ) {
-            return null
-        }
-
-        val prefix =
-            listOf(
-                (networkAddress ushr 24) and 0xff,
-                (networkAddress ushr 16) and 0xff,
-                (networkAddress ushr 8) and 0xff
-            ).joinToString(".")
-
-        return SubnetInfo(
-            networkPrefix = prefix,
-            firstHost = firstHost,
-            lastHost = lastHost
-        )
-    }
-
     private fun scanNetwork(
         context: Context,
         network: Network,
+        subnetPrefix: String,
         firstHost: Int,
         lastHost: Int,
         onFound: (String) -> Unit,
@@ -301,19 +209,7 @@ object ServerDiscovery {
         val executor =
             Executors.newFixedThreadPool(24)
 
-        val totalHosts =
-            lastHost - firstHost + 1
-
-        var submitted =
-            0
-
-        for (hostNumber in firstHost..lastHost) {
-
-            if (submitted >= MAX_HOSTS) {
-                break
-            }
-
-            submitted++
+        for (host in firstHost..lastHost) {
 
             executor.execute {
 
@@ -321,11 +217,8 @@ object ServerDiscovery {
                     return@execute
                 }
 
-                val ip =
-                    intToIp(hostNumber)
-
                 val serverUrl =
-                    "http://$ip:$CRM_PORT"
+                    "http://$subnetPrefix.$host:$CRM_PORT"
 
                 if (
                     isCrmServer(
@@ -358,10 +251,10 @@ object ServerDiscovery {
         thread {
 
             try {
+
                 executor.shutdown()
 
-                var waited =
-                    0
+                var waited = 0
 
                 while (
                     !executor.isTerminated &&
@@ -384,9 +277,9 @@ object ServerDiscovery {
                 showResult(
                     onError,
                     "CRM در شبکه محلی پیدا نشد.\n\n" +
-                        "تعداد IPهای بررسی‌شده: $submitted\n" +
-                        "پورت بررسی‌شده: $CRM_PORT\n\n" +
-                        "گوشی و لپ‌تاپ باید به همان شبکه Wi-Fi متصل باشند."
+                        "Subnet: $subnetPrefix.x\n" +
+                        "Port: $CRM_PORT\n\n" +
+                        "گوشی و لپ‌تاپ باید روی همان Wi-Fi باشند."
                 )
             }
         }
@@ -448,33 +341,15 @@ object ServerDiscovery {
         }
     }
 
-    private fun intToIp(
-        value: Int
-    ): String {
-
-        return listOf(
-            (value ushr 24) and 0xff,
-            (value ushr 16) and 0xff,
-            (value ushr 8) and 0xff,
-            value and 0xff
-        ).joinToString(".")
-    }
-
     private fun showResult(
-        callback: ((String) -> Unit)?,
-        message: String?
+        callback: (String) -> Unit,
+        message: String
     ) {
-
-        if (
-            callback == null ||
-            message == null
-        ) {
-            return
-        }
 
         Handler(
             Looper.getMainLooper()
         ).post {
+
             callback(message)
         }
     }
