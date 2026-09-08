@@ -16,6 +16,7 @@ import androidx.core.content.ContextCompat
 import java.net.HttpURLConnection
 import java.net.Inet4Address
 import java.net.URL
+import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
@@ -25,11 +26,11 @@ object ServerDiscovery {
     private const val SERVICE_TYPE = "_crm._tcp."
     private const val DEFAULT_PORT = 5001
 
-    private const val MDNS_TIMEOUT = 8000L
-    private const val SCAN_TIMEOUT = 15000L
+    private const val MDNS_TIMEOUT_MS = 8000L
+    private const val SCAN_TIMEOUT_MS = 15000L
 
-    private const val HTTP_CONNECT_TIMEOUT = 800
-    private const val HTTP_READ_TIMEOUT = 1000
+    private const val HTTP_CONNECT_TIMEOUT_MS = 800
+    private const val HTTP_READ_TIMEOUT_MS = 1000
 
     fun hasNearbyWifiPermission(
         context: Context
@@ -60,7 +61,9 @@ object ServerDiscovery {
             context.applicationContext
 
         val mainHandler =
-            Handler(Looper.getMainLooper())
+            Handler(
+                Looper.getMainLooper()
+            )
 
         if (
             Build.VERSION.SDK_INT >=
@@ -80,6 +83,11 @@ object ServerDiscovery {
                 Context.CONNECTIVITY_SERVICE
             ) as ConnectivityManager
 
+        val nsdManager =
+            appContext.getSystemService(
+                Context.NSD_SERVICE
+            ) as NsdManager
+
         val finished =
             AtomicBoolean(false)
 
@@ -88,6 +96,26 @@ object ServerDiscovery {
 
         var discoveryListener:
             NsdManager.DiscoveryListener? = null
+
+        var mdnsTimeoutRunnable:
+            Runnable? = null
+
+        fun stopMdns() {
+
+            try {
+
+                val listener =
+                    discoveryListener
+
+                if (listener != null) {
+                    nsdManager.stopServiceDiscovery(
+                        listener
+                    )
+                }
+
+            } catch (_: Exception) {
+            }
+        }
 
         fun finishSuccess(
             serverUrl: String
@@ -102,17 +130,11 @@ object ServerDiscovery {
                 return
             }
 
-            try {
-                discoveryListener?.let {
-                    val nsdManager =
-                        appContext.getSystemService(
-                            Context.NSD_SERVICE
-                        ) as NsdManager
-
-                    nsdManager.stopServiceDiscovery(it)
-                }
-            } catch (_: Exception) {
+            mdnsTimeoutRunnable?.let {
+                mainHandler.removeCallbacks(it)
             }
+
+            stopMdns()
 
             try {
                 nsdExecutor.shutdownNow()
@@ -130,6 +152,35 @@ object ServerDiscovery {
             }
         }
 
+        fun finishError(
+            message: String
+        ) {
+
+            if (
+                !finished.compareAndSet(
+                    false,
+                    true
+                )
+            ) {
+                return
+            }
+
+            mdnsTimeoutRunnable?.let {
+                mainHandler.removeCallbacks(it)
+            }
+
+            stopMdns()
+
+            try {
+                nsdExecutor.shutdownNow()
+            } catch (_: Exception) {
+            }
+
+            mainHandler.post {
+                onError(message)
+            }
+        }
+
         fun startNetworkScan() {
 
             if (finished.get()) {
@@ -137,6 +188,9 @@ object ServerDiscovery {
             }
 
             thread {
+
+                var scanExecutor:
+                    ExecutorService? = null
 
                 try {
 
@@ -149,19 +203,9 @@ object ServerDiscovery {
                         wifiNetwork == null
                     ) {
 
-                        if (
-                            finished.compareAndSet(
-                                false,
-                                true
-                            )
-                        ) {
-
-                            mainHandler.post {
-                                onError(
-                                    "شبکه Wi-Fi فعال پیدا نشد."
-                                )
-                            }
-                        }
+                        finishError(
+                            "شبکه Wi-Fi فعال پیدا نشد."
+                        )
 
                         return@thread
                     }
@@ -181,66 +225,40 @@ object ServerDiscovery {
                         candidates.isEmpty()
                     ) {
 
-                        if (
-                            finished.compareAndSet(
-                                false,
-                                true
-                            )
-                        ) {
-
-                            mainHandler.post {
-                                onError(
-                                    "IP شبکه Wi-Fi پیدا نشد."
-                                )
-                            }
-                        }
+                        finishError(
+                            "آدرس IPv4 شبکه Wi-Fi پیدا نشد."
+                        )
 
                         return@thread
                     }
 
-                    val executor =
+                    scanExecutor =
                         Executors.newFixedThreadPool(
                             32
                         )
-
-                    val scanFinished =
-                        AtomicBoolean(false)
 
                     val timeoutRunnable =
                         Runnable {
 
                             if (
-                                scanFinished.compareAndSet(
-                                    false,
-                                    true
-                                )
-                            {
+                                !finished.get()
+                            ) {
 
                                 try {
-                                    executor.shutdownNow()
+                                    scanExecutor?.shutdownNow()
                                 } catch (_: Exception) {
                                 }
 
-                                if (
-                                    finished.compareAndSet(
-                                        false,
-                                        true
-                                    )
-                                ) {
-
-                                    mainHandler.post {
-                                        onError(
-                                            "mDNS و جستجوی مستقیم شبکه نتوانستند CRM را پیدا کنند.\n\n" +
-                                                "گوشی و لپ‌تاپ باید روی یک شبکه محلی باشند."
-                                        )
-                                    }
-                                }
+                                finishError(
+                                    "mDNS و جستجوی مستقیم شبکه نتوانستند CRM را پیدا کنند.\n\n" +
+                                        "گوشی و لپ‌تاپ باید روی یک شبکه محلی باشند."
+                                )
                             }
                         }
 
                     mainHandler.postDelayed(
                         timeoutRunnable,
-                        SCAN_TIMEOUT
+                        SCAN_TIMEOUT_MS
                     )
 
                     for (
@@ -248,73 +266,60 @@ object ServerDiscovery {
                     ) {
 
                         if (
-                            finished.get() ||
-                            scanFinished.get()
+                            finished.get()
                         ) {
                             break
                         }
 
+                        val executor =
+                            scanExecutor
+                                ?: break
+
                         executor.execute {
 
                             if (
-                                finished.get() ||
-                                scanFinished.get()
+                                finished.get()
                             ) {
                                 return@execute
                             }
 
-                            if (
+                            val isCrm =
                                 isCrmServer(
                                     wifiNetwork,
                                     host,
                                     DEFAULT_PORT
                                 )
+
+                            if (
+                                isCrm
                             ) {
 
-                                if (
-                                    scanFinished.compareAndSet(
-                                        false,
-                                        true
-                                    )
-                                {
-
-                                    mainHandler.removeCallbacks(
-                                        timeoutRunnable
-                                    )
-
-                                    try {
-                                        executor.shutdownNow()
-                                    } catch (_: Exception) {
-                                    }
-
-                                    finishSuccess(
-                                        "http://$host:$DEFAULT_PORT"
-                                    )
-                                }
+                                finishSuccess(
+                                    "http://$host:$DEFAULT_PORT"
+                                )
                             }
                         }
                     }
 
-                    executor.shutdown()
+                    executorShutdown(
+                        scanExecutor
+                    )
 
                 } catch (e: Exception) {
 
-                    if (
-                        finished.compareAndSet(
-                            false,
-                            true
-                        )
-                    ) {
-
-                        mainHandler.post {
-                            onError(
-                                "خطا در جستجوی شبکه:\n\n" +
-                                    (
-                                        e.message
-                                            ?: e.javaClass.simpleName
-                                    )
+                    finishError(
+                        "خطا در جستجوی شبکه:\n\n" +
+                            (
+                                e.message
+                                    ?: e.javaClass.simpleName
                             )
-                        }
+                    )
+
+                } finally {
+
+                    try {
+                        scanExecutor?.shutdown()
+                    } catch (_: Exception) {
                     }
                 }
             }
@@ -335,11 +340,6 @@ object ServerDiscovery {
                     Build.VERSION_CODES.TIRAMISU
                 ) {
 
-                    val nsdManager =
-                        appContext.getSystemService(
-                            Context.NSD_SERVICE
-                        ) as NsdManager
-
                     nsdManager.resolveService(
                         serviceInfo,
                         nsdExecutor,
@@ -347,7 +347,7 @@ object ServerDiscovery {
                             NsdManager.ResolveListener {
 
                             override fun onServiceResolved(
-                                info: NsdServiceInfo
+                                resolvedInfo: NsdServiceInfo
                             ) {
 
                                 if (
@@ -357,14 +357,14 @@ object ServerDiscovery {
                                 }
 
                                 val host =
-                                    info.host
+                                    resolvedInfo.host
                                         ?.hostAddress
 
                                 val port =
                                     if (
-                                        info.port > 0
+                                        resolvedInfo.port > 0
                                     ) {
-                                        info.port
+                                        resolvedInfo.port
                                     } else {
                                         DEFAULT_PORT
                                     }
@@ -380,20 +380,15 @@ object ServerDiscovery {
                             }
 
                             override fun onResolveFailed(
-                                info: NsdServiceInfo,
+                                serviceInfo: NsdServiceInfo,
                                 errorCode: Int
                             ) {
+                                // اسکن مستقیم شبکه بعد از timeout انجام می‌شود.
                             }
                         }
                     )
 
                 } else {
-
-                    @Suppress("DEPRECATION")
-                    val nsdManager =
-                        appContext.getSystemService(
-                            Context.NSD_SERVICE
-                        ) as NsdManager
 
                     @Suppress("DEPRECATION")
                     nsdManager.resolveService(
@@ -402,7 +397,7 @@ object ServerDiscovery {
                             NsdManager.ResolveListener {
 
                             override fun onServiceResolved(
-                                info: NsdServiceInfo
+                                resolvedInfo: NsdServiceInfo
                             ) {
 
                                 if (
@@ -412,14 +407,14 @@ object ServerDiscovery {
                                 }
 
                                 val host =
-                                    info.host
+                                    resolvedInfo.host
                                         ?.hostAddress
 
                                 val port =
                                     if (
-                                        info.port > 0
+                                        resolvedInfo.port > 0
                                     ) {
-                                        info.port
+                                        resolvedInfo.port
                                     } else {
                                         DEFAULT_PORT
                                     }
@@ -435,22 +430,19 @@ object ServerDiscovery {
                             }
 
                             override fun onResolveFailed(
-                                info: NsdServiceInfo,
+                                serviceInfo: NsdServiceInfo,
                                 errorCode: Int
                             ) {
+                                // اسکن مستقیم شبکه بعد از timeout انجام می‌شود.
                             }
                         }
                     )
                 }
 
             } catch (_: Exception) {
+                // ادامه می‌دهیم تا fallback شبکه اجرا شود.
             }
         }
-
-        val nsdManager =
-            appContext.getSystemService(
-                Context.NSD_SERVICE
-            ) as NsdManager
 
         discoveryListener =
             object :
@@ -460,25 +452,21 @@ object ServerDiscovery {
                     serviceType: String
                 ) {
 
-                    mainHandler.postDelayed(
-                        {
+                    mdnsTimeoutRunnable =
+                        Runnable {
 
                             if (
                                 !finished.get()
                             ) {
 
-                                try {
-                                    nsdManager.stopServiceDiscovery(
-                                        this
-                                    )
-                                } catch (_: Exception) {
-                                }
-
+                                stopMdns()
                                 startNetworkScan()
                             }
+                        }
 
-                        },
-                        MDNS_TIMEOUT
+                    mainHandler.postDelayed(
+                        mdnsTimeoutRunnable!!,
+                        MDNS_TIMEOUT_MS
                     )
                 }
 
@@ -492,12 +480,12 @@ object ServerDiscovery {
                         return
                     }
 
-                    val type =
+                    val serviceType =
                         serviceInfo.serviceType
                             ?: ""
 
                     if (
-                        !type.contains(
+                        !serviceType.contains(
                             "_crm._tcp",
                             ignoreCase = true
                         )
@@ -525,13 +513,7 @@ object ServerDiscovery {
                     errorCode: Int
                 ) {
 
-                    try {
-                        nsdManager.stopServiceDiscovery(
-                            this
-                        )
-                    } catch (_: Exception) {
-                    }
-
+                    stopMdns()
                     startNetworkScan()
                 }
 
@@ -762,10 +744,10 @@ object ServerDiscovery {
                 "GET"
 
             connection.connectTimeout =
-                HTTP_CONNECT_TIMEOUT
+                HTTP_CONNECT_TIMEOUT_MS
 
             connection.readTimeout =
-                HTTP_READ_TIMEOUT
+                HTTP_READ_TIMEOUT_MS
 
             connection.instanceFollowRedirects =
                 false
@@ -790,6 +772,16 @@ object ServerDiscovery {
                 connection?.disconnect()
             } catch (_: Exception) {
             }
+        }
+    }
+
+    private fun executorShutdown(
+        executor: ExecutorService?
+    ) {
+
+        try {
+            executor?.shutdown()
+        } catch (_: Exception) {
         }
     }
 }
