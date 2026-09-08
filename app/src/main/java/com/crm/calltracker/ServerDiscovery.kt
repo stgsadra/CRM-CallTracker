@@ -32,14 +32,11 @@ object ServerDiscovery {
         onFound: (String) -> Unit,
         onError: (String) -> Unit
     ) {
-
         val appContext =
             context.applicationContext
 
         thread {
-
             try {
-
                 val connectivityManager =
                     appContext.getSystemService(
                         Context.CONNECTIVITY_SERVICE
@@ -49,12 +46,10 @@ object ServerDiscovery {
                     connectivityManager.activeNetwork
 
                 if (network == null) {
-
                     showResult(
                         onError,
                         "هیچ شبکه فعالی در گوشی پیدا نشد."
                     )
-
                     return@thread
                 }
 
@@ -64,12 +59,10 @@ object ServerDiscovery {
                     )
 
                 if (capabilities == null) {
-
                     showResult(
                         onError,
                         "اطلاعات شبکه فعال گوشی دریافت نشد."
                     )
-
                     return@thread
                 }
 
@@ -79,12 +72,10 @@ object ServerDiscovery {
                     )
 
                 if (!isWifi) {
-
                     showResult(
                         onError,
                         "گوشی به Wi-Fi متصل نیست."
                     )
-
                     return@thread
                 }
 
@@ -94,12 +85,10 @@ object ServerDiscovery {
                     )
 
                 if (linkProperties == null) {
-
                     showResult(
                         onError,
                         "اطلاعات IP شبکه Wi-Fi دریافت نشد."
                     )
-
                     return@thread
                 }
 
@@ -109,12 +98,10 @@ object ServerDiscovery {
                     )
 
                 if (ipv4Address == null) {
-
                     showResult(
                         onError,
                         "IP نسخه 4 گوشی پیدا نشد."
                     )
-
                     return@thread
                 }
 
@@ -122,15 +109,13 @@ object ServerDiscovery {
                     ipv4Address.address
 
                 val ip =
-                    address.getHostAddress()
+                    address.hostAddress
 
-                if (ip == null || ip.isEmpty()) {
-
+                if (ip.isNullOrEmpty()) {
                     showResult(
                         onError,
                         "IP گوشی قابل تشخیص نیست."
                     )
-
                     return@thread
                 }
 
@@ -141,14 +126,12 @@ object ServerDiscovery {
                     prefixLength < 16 ||
                     prefixLength > 30
                 ) {
-
                     showResult(
                         onError,
                         "Subnet شبکه پشتیبانی نمی‌شود.\n\n" +
                             "IP گوشی: $ip\n" +
                             "Prefix: $prefixLength"
                     )
-
                     return@thread
                 }
 
@@ -156,12 +139,10 @@ object ServerDiscovery {
                     ip.split(".")
 
                 if (ipParts.size != 4) {
-
                     showResult(
                         onError,
                         "IP گوشی معتبر نیست:\n$ip"
                     )
-
                     return@thread
                 }
 
@@ -179,12 +160,10 @@ object ServerDiscovery {
                     second == null ||
                     third == null
                 ) {
-
                     showResult(
                         onError,
                         "ساختار IP گوشی معتبر نیست:\n$ip"
                     )
-
                     return@thread
                 }
 
@@ -201,7 +180,6 @@ object ServerDiscovery {
                 )
 
             } catch (e: Exception) {
-
                 showResult(
                     onError,
                     "خطا در تشخیص شبکه:\n\n" +
@@ -222,7 +200,6 @@ object ServerDiscovery {
             linkAddress
             in linkProperties.linkAddresses
         ) {
-
             val address =
                 linkAddress.address
 
@@ -231,7 +208,6 @@ object ServerDiscovery {
                 !address.isLoopbackAddress &&
                 !address.isLinkLocalAddress
             ) {
-
                 return linkAddress
             }
         }
@@ -298,7 +274,6 @@ object ServerDiscovery {
         thread {
 
             try {
-
                 executor.shutdown()
 
                 var waited =
