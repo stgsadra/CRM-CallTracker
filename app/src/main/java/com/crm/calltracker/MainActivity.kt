@@ -99,12 +99,7 @@ class MainActivity : ComponentActivity() {
                 orientation = LinearLayout.VERTICAL
                 setPadding(32, 32, 32, 32)
             }
-
-        val scrollView =
-            ScrollView(this).apply {
-                addView(root)
-            }
-
+            
         setContentView(scrollView)
 
         // ---------------------------------------------------------
