@@ -14,7 +14,6 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ListView
-import android.widget.ScrollView
 import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
@@ -100,7 +99,7 @@ class MainActivity : ComponentActivity() {
                 setPadding(32, 32, 32, 32)
             }
             
-        setContentView(scrollView)
+        setContentView(root)
 
         // ---------------------------------------------------------
         // LOGIN LAYOUT
